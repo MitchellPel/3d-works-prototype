@@ -41,9 +41,10 @@ export function MeshCanvas({
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enablePan = false;
     controls.autoRotate = !matchMedia("(prefers-reduced-motion: reduce)").matches;
-    scene.add(new THREE.AmbientLight(0xffffff, 0.7));
-    const key = new THREE.DirectionalLight(0xffffff, 2.2);
-    key.position.set(3, 4, 5);
+    scene.add(new THREE.AmbientLight(0xffffff, 0.85));
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x243028, 1.1));
+    const key = new THREE.DirectionalLight(0xffffff, 2.4);
+    key.position.set(3, 5, 4);
     scene.add(key);
 
     const color = tint[colour] ?? 0x3ddc6a;
@@ -51,16 +52,17 @@ export function MeshCanvas({
       new THREE.MeshStandardMaterial({ color, roughness: 0.42, metalness: 0.08, wireframe: wire });
     let root: THREE.Object3D;
     const size = new THREE.Vector3();
+    const bytes = buffer.slice(0);
     try {
       if (/\.obj$/i.test(name)) {
-        root = new OBJLoader().parse(new TextDecoder().decode(buffer));
+        root = new OBJLoader().parse(new TextDecoder().decode(bytes));
         root.traverse((child) => {
           const mesh = child as THREE.Mesh;
           if (mesh.isMesh) mesh.material = material();
         });
         new THREE.Box3().setFromObject(root).getSize(size);
       } else {
-        const geo = new STLLoader().parse(buffer);
+        const geo = new STLLoader().parse(bytes);
         geo.computeVertexNormals();
         geo.computeBoundingBox();
         geo.boundingBox?.getSize(size);
@@ -72,11 +74,11 @@ export function MeshCanvas({
     }
 
     onSizeRef.current?.(`${size.x.toFixed(0)} × ${size.y.toFixed(0)} × ${size.z.toFixed(0)}`);
-    root.rotation.x = -Math.PI / 2;
-    const center = new THREE.Box3().setFromObject(root).getCenter(new THREE.Vector3());
-    root.position.sub(center);
     const max = Math.max(size.x, size.y, size.z) || 1;
+    root.rotation.x = -Math.PI / 2;
     root.scale.setScalar(1.6 / max);
+    root.updateMatrixWorld(true);
+    root.position.sub(new THREE.Box3().setFromObject(root).getCenter(new THREE.Vector3()));
     scene.add(root);
 
     const canvas = renderer.domElement;
