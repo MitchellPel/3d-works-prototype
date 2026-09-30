@@ -11,6 +11,8 @@ npm run dev
 
 Open the local URL printed by the server. Build with `npm run build`.
 
+Client link: https://mitchellpel.github.io/3d-works-prototype/
+
 ## Prototype flows
 
 - **Home:** service pitch, process, materials, examples, quality and contact sections.
