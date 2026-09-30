@@ -100,6 +100,8 @@ footer{background:#030805}
 .viewer-tabs button{border:1px solid #2d4232;background:#0b150e;color:#b8cbb8;padding:6px 9px;border-radius:3px;font-size:10px}
 .viewer-tabs button.active{background:#214c27;color:#d9ffd4;border-color:#337b39}
 .viewer-render{position:absolute;inset:0;display:grid;place-items:center;overflow:hidden}
+.mesh-host{position:absolute;inset:0;z-index:1}
+.tracking-model-image{position:relative;overflow:hidden}
 .viewer-render img{position:relative;z-index:1;width:91%;max-height:78%;object-fit:contain;filter:drop-shadow(8px 22px 17px #0008)}
 .viewer-floor{position:absolute;inset:28% -35% -25%;background-image:linear-gradient(#91e37917 1px,transparent 1px),linear-gradient(90deg,#91e37917 1px,transparent 1px);background-size:37px 37px;transform:perspective(500px) rotateX(58deg)}
 .viewer-wireframe img{filter:grayscale(1) contrast(2) brightness(1.6) drop-shadow(0 0 6px #5afa50);opacity:.7}
