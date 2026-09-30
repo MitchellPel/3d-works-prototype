@@ -5,6 +5,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
 import { STLLoader } from "three/addons/loaders/STLLoader.js";
 import { modelXml } from "@/lib/read-3mf.mjs";
+import { parseBinaryStl } from "@/lib/read-stl.mjs";
 
 const tint: Record<string, number> = {
   Graphite: 0x5c6560,
@@ -99,8 +100,19 @@ export function MeshCanvas({
           });
           new THREE.Box3().setFromObject(root).getSize(size);
         } else {
-          const geo = new STLLoader().parse(bytes);
-          if (!geo.getAttribute("position")?.count) throw new Error("empty");
+          let geo: THREE.BufferGeometry | null = null;
+          try {
+            const parsed = new STLLoader().parse(bytes);
+            if (parsed.getAttribute("position")?.count) geo = parsed;
+          } catch {
+            geo = null;
+          }
+          if (!geo) {
+            const positions = parseBinaryStl(bytes);
+            if (!positions) throw new Error("empty");
+            geo = new THREE.BufferGeometry();
+            geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+          }
           geo.computeVertexNormals();
           geo.computeBoundingBox();
           geo.boundingBox?.getSize(size);
