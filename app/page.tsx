@@ -524,10 +524,8 @@ export default function Home() {
                   </button>
                 </div>
                 <div className="hero-proof">
-                  <span>01 / UPLOAD</span>
-                  <span>02 / ESTIMATE</span>
-                  <span>03 / CONFIRM</span>
-                  <span>04 / PRINT</span>
+                  <span className="avatars"><i>MP</i><i>DN</i><i>AJ</i></span>
+                  <span>For makers, studios &amp; businesses<br /><b>built with care, every time.</b></span>
                 </div>
               </div>
               <div className="hero-art">
@@ -546,6 +544,17 @@ export default function Home() {
                   </span>
                 </div>
               </div>
+            </div>
+            <div className="wrap hero-benefits">
+              <div><span>✦</span><b>High quality prints</b><small>Careful results for every project</small></div>
+              <div><span>⬡</span><b>Wide material range</b><small>From prototypes to end-use parts</small></div>
+              <div><span>▣</span><b>Fast turnaround</b><small>Get your parts sooner</small></div>
+              <div><span>✓</span><b>Real human support</b><small>Help from the studio team</small></div>
+            </div>
+            <div className="wrap hero-bottom">
+              <span>DESIGNED TO FIT YOUR IDEA</span>
+              <span>01 / UPLOAD &nbsp;&nbsp; 02 / ESTIMATE &nbsp;&nbsp; 03 / PRINT</span>
+              <span>SCROLL TO EXPLORE ↓</span>
             </div>
           </section>
           <section className="section light">
@@ -630,6 +639,42 @@ export default function Home() {
                   </div>
                 ))}
               </div>
+            </div>
+          </section>
+          <section className="section materials light">
+            <div className="wrap">
+              <div className="section-head">
+                <div><span className="overline">MATERIALS &amp; FINISH</span><h2>Made for the job.</h2></div>
+                <p>Choose the right balance of detail, durability and finish. We&apos;ll help if you&apos;re unsure.</p>
+              </div>
+              <div className="material-grid">
+                {[
+                  ["PLA", "EVERYDAY VERSATILITY", "Great for visual prototypes, display pieces and quick iterations."],
+                  ["PETG", "BUILT TO LAST", "Strong, reliable parts with a little more flexibility and resilience."],
+                  ["ASA", "OUTDOOR READY", "Durable performance for demanding and outdoor applications."],
+                ].map((item, index) => <div className="material-card" key={item[0]}>
+                  <div className={`swatch swatch-${index}`} /><span>{item[1]}</span><h3>{item[0]}</h3><p>{item[2]}</p>
+                </div>)}
+              </div>
+            </div>
+          </section>
+          <section className="section examples">
+            <div className="wrap">
+              <div className="section-head">
+                <div><span className="overline">POSSIBILITIES</span><h2>Your idea belongs here.</h2></div>
+                <p>Small details, big ideas, and practical fixes. There&apos;s room for all of them.</p>
+              </div>
+              <div className="example-grid">
+                <div className="example"><span>01 / PROTOTYPING</span><div className="example-art"><Model /></div><h3>Form meets function.</h3><p>Test the shape before you scale.</p></div>
+                <div className="example"><span>02 / FUNCTIONAL PARTS</span><div className="example-art rings"><i /><i /><i /></div><h3>Built to solve.</h3><p>Parts that make everyday work easier.</p></div>
+                <div className="example"><span>03 / CUSTOM OBJECTS</span><div className="example-art vase"><i /></div><h3>Made for your space.</h3><p>One-off pieces with a point of view.</p></div>
+              </div>
+            </div>
+          </section>
+          <section className="section trust light">
+            <div className="wrap trust-grid">
+              <div><span className="overline">THE 3D CRAFTWORX APPROACH</span><h2>Good work is in<br />the details.</h2></div>
+              <div><p>Every model gets a human review before we print. We look at orientation, material, finish and practical use so the final piece feels as good as it looks.</p><div className="trust-points"><span><Check /> Human-reviewed files</span><span><Check /> Clear updates along the way</span><span><Check /> Quality-focused finishing</span></div></div>
             </div>
           </section>
           <section className="cta">
