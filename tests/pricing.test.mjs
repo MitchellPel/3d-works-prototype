@@ -38,7 +38,7 @@ test("backend quote accounts for volume, quantity, material, machine, minimum an
     model: { boundsMm: [10, 10, 10], enclosedVolumeMm3: 1000 },
     machines: [machine],
     materials: [material],
-    rules,
+    rules: { ...rules, id: true, sample_values: true },
     infill: 20,
     qty: 2,
     quality: "Standard · 0.20 mm",

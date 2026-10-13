@@ -69,7 +69,14 @@ export function estimateQuote(input: {
   quality: string;
 }): QuoteEstimate {
   const { model, rules } = input;
-  for (const [label, value] of Object.entries(rules)) {
+  const numericRules: (keyof PricingRules)[] = [
+    "material_markup_percent", "setup_fee_cents", "minimum_charge_cents",
+    "waste_percent", "support_percent", "vat_percent", "delivery_fee_cents",
+    "shell_fraction_percent", "open_mesh_fill_percent",
+    "quality_draft_multiplier", "quality_fine_multiplier",
+  ];
+  for (const label of numericRules) {
+    const value = rules[label];
     if (!Number.isFinite(value) || value < 0)
       throw new Error(`Invalid pricing rule: ${label}`);
   }
