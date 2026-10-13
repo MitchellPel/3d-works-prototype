@@ -1,76 +1,1255 @@
 "use client";
-import {useEffect,useMemo,useRef,useState} from "react";
-import {ArrowRight,ArrowUpRight,Box,Check,ChevronDown,ChevronLeft,ChevronRight,Clock3,FileBox,GripVertical,Layers3,Mail,Menu,Minus,Plus,Printer,RotateCcw,Search,Send,UploadCloud,X} from "lucide-react";
-import {MeshCanvas} from "@/components/mesh-view";
-import {getFile,putFile} from "@/lib/files";
 
-type Stage="Submitted"|"Quoted"|"Approved"|"Printing"|"Post-Processing"|"Ready for Collection"|"Completed";
-type Job={id:string;customer:string;email:string;file:string;material:string;colour:string;quality:string;infill:number;qty:number;due:string;price:number;status:Stage;progress:number;note:string;activity:string[]};
-const stages:Stage[]=["Submitted","Quoted","Approved","Printing","Post-Processing","Ready for Collection","Completed"];
-const headings:Record<Stage,string>={Submitted:"New Orders",Quoted:"Quoted",Approved:"Approved",Printing:"Printing","Post-Processing":"Post-Processing","Ready for Collection":"Ready for Collection",Completed:"Completed"};
-const initial:Job[]=[
- {id:"3DW-1048",customer:"Maya Peterson",email:"maya@formstudio.co.za",file:"mounting-bracket-v3.stl",material:"PETG",colour:"Graphite",quality:"Standard · 0.20 mm",infill:30,qty:8,due:"04 Oct 2026",price:1240,status:"Printing",progress:62,note:"Check fit against supplied drawing before packing.",activity:["Print started · Today 09:42","Quote approved · 29 Sep","Request submitted · 28 Sep"]},
- {id:"3DW-1049",customer:"Daniel Mokoena",email:"daniel.m@example.co.za",file:"camera-housing.3mf",material:"ASA",colour:"Black",quality:"Fine · 0.12 mm",infill:40,qty:2,due:"06 Oct 2026",price:890,status:"Approved",progress:0,note:"Outdoor use; confirm UV-resistant material.",activity:["Quote approved · Today 08:15","Request submitted · 29 Sep"]},
- {id:"3DW-1050",customer:"Aisha Naidoo",email:"aisha@northline.co.za",file:"prototype-enclosure.stl",material:"PLA",colour:"Forest green",quality:"Standard · 0.20 mm",infill:20,qty:3,due:"08 Oct 2026",price:760,status:"Submitted",progress:0,note:"Customer asked for a smooth front face.",activity:["Request submitted · Yesterday 16:36"]},
- {id:"3DW-1045",customer:"Liam van der Merwe",email:"liam@example.co.za",file:"desk-organiser.obj",material:"PLA",colour:"Warm white",quality:"Draft · 0.28 mm",infill:15,qty:4,due:"02 Oct 2026",price:540,status:"Quoted",progress:0,note:"Awaiting customer approval.",activity:["Quote sent · Yesterday 13:12","Request submitted · 26 Sep"]},
- {id:"3DW-1042",customer:"Nina Jacobs",email:"nina@atelier.co.za",file:"display-plinth.stl",material:"PLA",colour:"Sand",quality:"Fine · 0.12 mm",infill:20,qty:1,due:"01 Oct 2026",price:680,status:"Post-Processing",progress:100,note:"Light sanding on visible edges.",activity:["Finishing started · Today 10:05","Print started · 28 Sep"]},
- {id:"3DW-1039",customer:"Theo Smith",email:"theo@example.co.za",file:"replacement-gear.stl",material:"PETG",colour:"Black",quality:"Standard · 0.20 mm",infill:60,qty:2,due:"30 Sep 2026",price:320,status:"Ready for Collection",progress:100,note:"Bag with original sample part.",activity:["Ready for collection · Today 08:30"]},
- {id:"3DW-1035",customer:"Ella Williams",email:"ella@example.co.za",file:"planter-prototype.stl",material:"PLA",colour:"Terracotta",quality:"Draft · 0.28 mm",infill:15,qty:2,due:"28 Sep 2026",price:410,status:"Completed",progress:100,note:"Collected by customer.",activity:["Collected · 28 Sep 14:20"]}
-];
-const money=(n:number)=>"R "+n.toLocaleString("en-ZA");
-function Logo(){return <span className="logo"><span className="logo-symbol"><i/><i/><i/></span>3D <b>WORKS</b></span>}
-function Btn({children,onClick,outline=false,type="button"}:{children:React.ReactNode;onClick?:()=>void;outline?:boolean;type?:"button"|"submit"}){return <button type={type} className={"btn "+(outline?"outline":"")} onClick={onClick}>{children}</button>}
-function Chip({status}:{status:Stage}){return <span className={"chip chip-"+stages.indexOf(status)}>{status}</span>}
-function Select({value,change,options}:{value:string;change:(x:string)=>void;options:string[]}){return <span className="select"><select value={value} onChange={e=>change(e.target.value)}>{options.map(x=><option key={x}>{x}</option>)}</select><ChevronDown size={15}/></span>}
-function Model({small=false}:{small?:boolean}){return <div className={"model "+(small?"small":"")}><div className="model-grid"/><div className="model-shape"><span className="shape-top"/><span className="shape-front"><i/><i/></span><span className="shape-side"/></div>{!small&&<span className="model-axis">X <b>Y</b> Z</span>}</div>}
-function canPreview(name:string){return /\.(stl|obj|3mf)$/i.test(name)}
-function isPicture(file:File){return /^image\//.test(file.type)||/\.(png|jpe?g|webp|gif|bmp)$/i.test(file.name)}
-function Viewer({name,buffer,colour,picture,onFile,onPick}:{name:string;buffer:ArrayBuffer|null;colour?:string;picture?:string|null;onFile?:(file?:File)=>void;onPick?:()=>void}){
- const [mode,setMode]=useState("3D Viewer");
- const [dims,setDims]=useState("");
- const [failed,setFailed]=useState(false);
- useEffect(()=>{setFailed(false)},[buffer,picture,name]);
- const live=!!buffer&&canPreview(name)&&!picture;
- return <div className="viewer" onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();onFile?.(e.dataTransfer.files?.[0])}}>
-  <div className="viewer-bar"><span><i/> 2. MODEL PREVIEW</span><span>{picture?"Picture":live?"Your file":"Sample"}</span></div>
-  <div className="viewer-tabs">{["3D Viewer","Wireframe","Dimensions"].map(label=><button type="button" className={mode===label?"active":""} key={label} onClick={()=>setMode(label)}>{label}</button>)}</div>
-  <div className={"viewer-render viewer-"+mode.toLowerCase().replace(" ","-")} onClick={()=>{if(!live&&!picture)onPick?.()}}><div className="viewer-floor"/>{picture?<img src={picture} alt="Uploaded picture"/>:live&&buffer?<MeshCanvas buffer={buffer} name={name} colour={colour} wire={mode==="Wireframe"} onSize={setDims} onError={()=>setFailed(true)}/>:<img src="/green-bracket.png" alt="Sample printed bracket"/>}{failed&&<span className="dimension-label">Couldn't read this file</span>}{!failed&&mode==="Dimensions"&&<span className="dimension-label">{live&&dims?dims+" · file units":"120 × 85 × 60 mm · sample"}</span>}</div>
-  <div className="viewer-bar bottom"><span><Box size={15}/>{picture?"Picture file":name}</span><span><RotateCcw size={14}/> {picture?"Not a print file. Use STL, OBJ, or 3MF.":live?"Drag to turn":"Drop the file on this preview"}</span></div>
- </div>
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
+import {
+  ArrowRight,
+  ArrowUpRight,
+  Check,
+  FileBox,
+  Layers3,
+  LogOut,
+  Menu,
+  Plus,
+  UploadCloud,
+  X,
+} from "lucide-react";
+import type { User } from "@supabase/supabase-js";
+import { AuthPanel } from "@/components/auth-panel";
+import { AdminPanel } from "@/components/admin-panel";
+import { MeshCanvas } from "@/components/mesh-view";
+import { getSupabase } from "@/lib/supabase";
+import {
+  toJob,
+  stages,
+  type Job,
+  type Profile,
+  type Stage,
+} from "@/lib/app-data";
+
+type Route =
+  "home" | "quote" | "tracking" | "board" | "detail" | "admin" | "account";
+type Option = { material_type: string; colour: string };
+const money = (value: number) =>
+  "R " +
+  value.toLocaleString("en-ZA", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+const modelFile = (name: string) => /\.(stl|obj|3mf)$/i.test(name);
+
+function Logo() {
+  return (
+    <span className="logo">
+      <span className="logo-symbol">
+        <i />
+        <i />
+        <i />
+      </span>
+      3D <b>CRAFTWORX</b>
+    </span>
+  );
 }
-export default function Home(){
- const [route,setRoute]=useState("home"),[jobs,setJobs]=useState<Job[]>(initial),[selected,setSelected]=useState("3DW-1048"),[tracked,setTracked]=useState("3DW-1048"),[toast,setToast]=useState(""),[menu,setMenu]=useState(false);
- const [file,setFile]=useState<File|null>(null),[preview,setPreview]=useState<ArrayBuffer|null>(null),[picture,setPicture]=useState<string|null>(null),[stored,setStored]=useState<Record<string,ArrayBuffer>>({}),[drag,setDrag]=useState(false),input=useRef<HTMLInputElement>(null);
- const [material,setMaterial]=useState("PETG"),[colour,setColour]=useState("Graphite"),[quality,setQuality]=useState("Standard · 0.20 mm"),[infill,setInfill]=useState(30),[qty,setQty]=useState(1),[name,setName]=useState(""),[email,setEmail]=useState(""),[note,setNote]=useState(""),[search,setSearch]=useState(""),[view,setView]=useState<"board"|"list">("board"),[staffNote,setStaffNote]=useState("");
- useEffect(()=>{try{const s=localStorage.getItem("3dw-demo-jobs");if(s)setJobs(JSON.parse(s))}catch{}setRoute(location.hash.slice(1)||"home");const onHash=()=>setRoute(location.hash.slice(1)||"home");window.addEventListener("hashchange",onHash);return()=>window.removeEventListener("hashchange",onHash)},[]);
- useEffect(()=>{localStorage.setItem("3dw-demo-jobs",JSON.stringify(jobs))},[jobs]);
- useEffect(()=>{if(toast){const t=setTimeout(()=>setToast(""),3200);return()=>clearTimeout(t)}},[toast]);
- useEffect(()=>{for(const id of [selected,tracked]){getFile(id).then(buf=>{if(buf)setStored(s=>s[id]?s:{...s,[id]:buf})}).catch(()=>{})}},[selected,tracked]);
- const go=(r:string)=>{location.hash=r;setRoute(r);setMenu(false);scrollTo(0,0)};
- const active=jobs.find(x=>x.id===selected)||jobs[0],order=jobs.find(x=>x.id===tracked)||jobs[0];
- const estimate=useMemo(()=>Math.round((180+(material==="ASA"?120:material==="PETG"?70:0)+(quality.startsWith("Fine")?100:quality.startsWith("Draft")?-25:0)+(infill-20)*2)*qty/10)*10,[material,quality,infill,qty]);
- const move=(id:string,status:Stage)=>{setJobs(jobs=>jobs.map(j=>j.id===id?{...j,status,progress:status==="Printing"?Math.max(j.progress,12):stages.indexOf(status)>3?100:j.progress,activity:["Moved to "+status+" · Just now",...j.activity]}:j));setToast(id+" moved to "+status)};
- const choose=async(f?:File)=>{if(!f)return;if(picture)URL.revokeObjectURL(picture);if(isPicture(f)){setFile(null);setPreview(null);setPicture(URL.createObjectURL(f));setToast("That's a picture. Export an STL, OBJ, or 3MF to preview the print.");return}setPicture(null);if(!canPreview(f.name)){setToast("Use an STL, OBJ, or 3MF file");return}if(f.size>50*1024*1024){setToast("Keep the file under 50 MB");return}setFile(f);setPreview(await f.arrayBuffer());setToast(f.name+" added")};
- const submit=async(e:React.FormEvent)=>{e.preventDefault();if(!file){setToast("Add a model file to continue");input.current?.focus();return}const id="3DW-"+(Math.max(...jobs.map(j=>Number(j.id.split("-")[1])))+1);const buf=preview??await file.arrayBuffer();await putFile(id,buf);setStored(s=>({...s,[id]:buf}));const j:Job={id,customer:name,email,file:file.name,material,colour,quality,infill,qty,due:"To be confirmed",price:estimate,status:"Submitted",progress:0,note:note||"New quote request",activity:["Request submitted · Just now"]};setJobs([j,...jobs]);setTracked(id);setSelected(id);setFile(null);setPreview(null);setToast("Request "+id+" submitted");go("tracking")};
- const download=async(job:Job)=>{try{const buf=stored[job.id]??await getFile(job.id);if(!buf){setToast("This sample job has no file in this browser");return}const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([buf]));a.download=job.file;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1500)}catch{setToast("Could not read that file")}};
- const nav=<><button className={route==="home"?"active":""} onClick={()=>go("home")}>Home</button><button className={route==="quote"?"active":""} onClick={()=>go("quote")}>Get a quote</button><button className={route==="tracking"?"active":""} onClick={()=>go("tracking")}>Track an order</button><button className={["board","detail"].includes(route)?"active":""} onClick={()=>go("board")}>Staff workspace <ArrowUpRight size={14}/></button></>;
- return <div className="app">
- {!["board","detail"].includes(route)&&<header className="public-header"><div className="wrap header-in"><button className="plain" onClick={()=>go("home")}><Logo/></button><nav>{nav}</nav><div className="header-end"><span className="availability"><i/> Taking new projects</span><Btn onClick={()=>go("quote")}>Get a quote <ArrowUpRight size={16}/></Btn></div><button className="mobile-menu plain" onClick={()=>setMenu(!menu)}>{menu?<X/>:<Menu/>}</button></div>{menu&&<nav className="mobile-nav">{nav}</nav>}</header>}
- {route==="home"&&<main>
-  <section className="hero"><div className="wrap hero-grid"><div className="hero-copy"><span className="eyebrow"><i/> MADE REAL, LAYER BY LAYER</span><h1>3D Printing<br/><em>Services.</em></h1><p>Upload your 3D model and get a clear quote. Professional 3D printing for makers, businesses and creators.</p><div className="hero-actions"><Btn onClick={()=>go("quote")}>Get a quote <ArrowRight size={18}/></Btn><Btn outline onClick={()=>go("quote")}>Upload your file <UploadCloud size={17}/></Btn></div><div className="hero-proof"><span className="avatars"><i>MP</i><i>DN</i><i>AJ</i></span><span>For makers, studios & businesses<br/><b>built with care, every time.</b></span></div></div><div className="hero-art"><div className="art-top"><span><i/> 3D WORKS / PRINT STUDIO</span><span>01 — 05</span></div><Model/><div className="art-bottom"><span><b>Make it possible.</b><small>Custom parts. Thoughtful results.</small></span><span className="circle-arrow"><ArrowUpRight/></span></div></div></div><div className="wrap hero-benefits"><div><span>✦</span><b>High quality prints</b><small>Careful results for every project</small></div><div><span>⬡</span><b>Wide material range</b><small>From prototypes to end-use parts</small></div><div><span>▣</span><b>Fast turnaround</b><small>Get your parts sooner</small></div><div><span>✓</span><b>Real human support</b><small>Help from the studio team</small></div></div><div className="wrap hero-bottom"><span>DESIGNED TO FIT YOUR IDEA</span><span>01 / UPLOAD &nbsp;&nbsp; 02 / QUOTE &nbsp;&nbsp; 03 / PRINT</span><span>SCROLL TO EXPLORE ↓</span></div></section>
-  <section id="how" className="section light"><div className="wrap"><div className="section-head"><div><span className="overline">THE PROCESS</span><h2>Simple from the first file.</h2></div><p>Whether it’s your first print or your fiftieth, we keep the process clear and the result considered.</p></div><div className="steps">{[{n:"01",icon:<UploadCloud/>,title:"Share your design",text:"Upload an STL, OBJ or 3MF file and tell us what you need."},{n:"02",icon:<Layers3/>,title:"Shape your quote",text:"Choose a material and finish. We’ll review the details and confirm pricing."},{n:"03",icon:<Check/>,title:"We make it real",text:"We print, finish and prepare your part for collection."}].map(x=><div className="step" key={x.n}><div><span>{x.n} / 03</span><span className="step-icon">{x.icon}</span></div><h3>{x.title}</h3><p>{x.text}</p></div>)}</div></div></section>
-  <section className="section capabilities"><div className="wrap cap-grid"><div><span className="overline">WHAT WE MAKE</span><h2>Useful objects.<br/><em>Made beautifully.</em></h2><p>From a one-off prototype to a short production run, our material options give every project the right balance of look and performance.</p><Btn outline onClick={()=>go("quote")}>Start your project <ArrowUpRight size={16}/></Btn></div><div className="cap-list">{[["01","Rapid prototypes","Check the feel, fit and form before you commit."],["02","Functional parts","Brackets, housings and components made to work."],["03","Custom pieces","Display objects and details that are distinctly yours."]].map(x=><div className="cap-row" key={x[0]}><span>{x[0]}</span><div><h3>{x[1]}</h3><p>{x[2]}</p></div><ArrowUpRight size={20}/></div>)}</div></div></section>
-  <section className="section materials light"><div className="wrap"><div className="section-head"><div><span className="overline">MATERIALS & FINISH</span><h2>Made for the job.</h2></div><p>Choose the right balance of detail, durability and finish. We’ll help if you’re unsure.</p></div><div className="material-grid">{[["PLA","EVERYDAY VERSATILITY","Great for visual prototypes, display pieces and quick iterations."],["PETG","BUILT TO LAST","Strong, reliable parts with a little more flexibility and resilience."],["ASA","OUTDOOR READY","Durable performance for demanding and outdoor applications."]].map((x,i)=><div className="material-card" key={x[0]}><div className={"swatch swatch-"+i}/><span>{x[1]}</span><h3>{x[0]}</h3><p>{x[2]}</p></div>)}</div></div></section>
-  <section className="section examples"><div className="wrap"><div className="section-head"><div><span className="overline">POSSIBILITIES</span><h2>Your idea belongs here.</h2></div><p>Small details, big ideas, and practical fixes. There’s room for all of them.</p></div><div className="example-grid"><div className="example"><span>01 / PROTOTYPING</span><div className="example-art"><Model small/></div><h3>Form meets function.</h3><p>Test the shape before you scale.</p></div><div className="example"><span>02 / FUNCTIONAL PARTS</span><div className="example-art rings"><i/><i/><i/></div><h3>Built to solve.</h3><p>Parts that make everyday work easier.</p></div><div className="example"><span>03 / CUSTOM OBJECTS</span><div className="example-art vase"><i/></div><h3>Made for your space.</h3><p>One-off pieces with a point of view.</p></div></div></div></section>
-  <section className="section trust light"><div className="wrap trust-grid"><div><span className="overline">THE 3D WORKS APPROACH</span><h2>Good work is in<br/>the details.</h2></div><div><p>Every model gets a human review before we print. We look at orientation, material, finish and practical use so the final piece feels as good as it looks.</p><div className="trust-points"><span><Check/> Human-reviewed files</span><span><Check/> Clear updates along the way</span><span><Check/> Quality-focused finishing</span></div></div></div></section>
-  <section className="cta"><div className="wrap cta-grid"><div><span className="overline">LET’S MAKE IT HAPPEN</span><h2>Have a file in mind?</h2><p>Upload your design and we’ll help bring it into the real world.</p></div><Btn onClick={()=>go("quote")}>Get your quote <ArrowUpRight size={18}/></Btn></div></section><footer><div className="wrap footer-grid"><div><Logo/><p>Ideas made tangible.</p></div><div><span>EXPLORE</span><button onClick={()=>go("quote")}>Get a quote</button><button onClick={()=>go("tracking")}>Track an order</button><button onClick={()=>go("board")}>Staff workspace</button></div><div><span>GET IN TOUCH</span><a href="mailto:hello@3dworks.co.za">hello@3dworks.co.za</a><p>South Africa</p></div></div><div className="wrap footer-bottom"><span>© 2026 3D Works. Prototype demonstration.</span><span>MADE REAL, LAYER BY LAYER</span></div></footer>
- </main>}
- {route==="quote"&&<main className="page quote-page"><div className="wrap"><div className="page-head"><span className="overline">START A PROJECT / 01</span><h1>Let’s make it real.</h1><p>Upload your model, choose the essentials, and send us your request. We’ll review the file and confirm the final quote.</p></div><div className="quote-progress"><div className="active"><b>1</b><span>Upload Model</span></div><div><b>2</b><span>Review & Configure</span></div><div><b>3</b><span>Your Quote</span></div><div><b>4</b><span>Submit Request</span></div></div><form className="quote-grid" onSubmit={submit}><div className="quote-main"><section className="panel"><div className="panel-head"><span>01</span><div><h2>Your model</h2><p>Start with a design file</p></div></div><input className="sr-only" ref={input} type="file" accept=".stl,.obj,.3mf,image/*" onChange={e=>choose(e.target.files?.[0])}/><div role="button" tabIndex={0} className={"drop "+(drag?"drag":"")} onClick={()=>input.current?.click()} onKeyDown={e=>{if(e.key==="Enter"||e.key===" ")input.current?.click()}} onDragOver={e=>{e.preventDefault();setDrag(true)}} onDragLeave={()=>setDrag(false)} onDrop={e=>{e.preventDefault();setDrag(false);choose(e.dataTransfer.files[0])}}><span><UploadCloud size={27}/></span><b>{file?file.name:"Drop your model here"}</b><p>{file?"File ready for your request":"or click to browse your files"}</p><small>STL, OBJ or 3MF · max 50 MB for this demo</small></div><p className="helper"><FileBox size={16}/> We’ll review your file for printability before confirming a price.</p></section><section className="panel"><div className="panel-head"><span>02</span><div><h2>Print preferences</h2><p>Set the direction for your quote</p></div></div><div className="fields"><label>Material<Select value={material} change={setMaterial} options={["PLA","PETG","ASA"]}/></label><label>Colour<Select value={colour} change={setColour} options={["Graphite","Black","Warm white","Forest green","Sand","Terracotta"]}/></label><label>Layer height / quality<Select value={quality} change={setQuality} options={["Draft · 0.28 mm","Standard · 0.20 mm","Fine · 0.12 mm"]}/></label><label>Quantity<span className="stepper"><button type="button" onClick={()=>setQty(Math.max(1,qty-1))}><Minus size={15}/></button>{qty}<button type="button" onClick={()=>setQty(Math.min(100,qty+1))}><Plus size={15}/></button></span></label><label className="wide">Infill · {infill}%<input type="range" min="10" max="80" step="5" value={infill} onChange={e=>setInfill(Number(e.target.value))}/><small>Higher infill adds strength and material.</small></label></div></section><section className="panel"><div className="panel-head"><span>03</span><div><h2>Your details</h2><p>So we can get back to you</p></div></div><div className="fields"><label>Name<input value={name} onChange={e=>setName(e.target.value)} placeholder="Your name" required/></label><label>Email address<input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com" required/></label><label className="wide">Anything we should know?<textarea rows={3} value={note} onChange={e=>setNote(e.target.value)} placeholder="Tell us about fit, finish, deadline or intended use..."/></label></div></section></div><aside className="quote-aside"><Viewer name={file?.name||"mounting-bracket-v3.stl"} buffer={preview} colour={colour} picture={picture} onFile={choose} onPick={()=>input.current?.click()}/><section className="panel estimate"><span className="overline">PROTOTYPE ESTIMATE</span><strong>{money(estimate)}</strong><p>Indicative only. We’ll confirm a final price after reviewing your file.</p><div className="estimate-rows"><span>Material <b>{material}</b></span><span>Quality <b>{quality.split(" · ")[0]}</b></span><span>Quantity <b>{qty}</b></span><span>Dimensions / weight <b>After review</b></span></div><Btn type="submit">Submit quote request <ArrowRight size={17}/></Btn><small>No payment needed to request a quote.</small></section></aside></form></div></main>}
- {route==="tracking"&&<main className="page tracking-page"><div className="wrap"><div className="page-head row"><div><span className="overline">YOUR PROJECTS</span><h1>Order tracking.</h1><p>Follow your print from first file to final collection.</p></div><Btn onClick={()=>go("quote")}>Submit another job <Plus size={17}/></Btn></div><div className="tracking-grid"><aside className="orders"><div className="orders-title"><h2>Recent orders</h2><span>{jobs.length}</span></div>{jobs.slice(0,5).map(j=><button key={j.id} className={"order "+(tracked===j.id?"selected":"")} onClick={()=>setTracked(j.id)}><span className="mini-model"><Model small/></span><span><b>{j.id}</b><small>{j.file}</small><Chip status={j.status}/></span><ChevronRight size={16}/></button>)}</aside><article className="order-detail"><div className="order-top"><div><span className="overline">ORDER {order.id}</span><h2>{order.file}</h2><p>{order.material} · {order.qty} {order.qty===1?"piece":"pieces"}</p></div><Chip status={order.status}/></div><div className="current-stage"><span>CURRENT STAGE</span><h3>{order.status}</h3><p>{order.status==="Submitted"?"We’ve received your file and will review it shortly.":order.status==="Printing"?"Your part is on the printer. We’ll let you know when finishing is complete.":order.status==="Ready for Collection"?"Your order is ready to collect.":`Your order is currently ${order.status.toLowerCase()}.`}</p></div><div className="tracking-model"><div className="tracking-model-image">{stored[order.id]&&canPreview(order.file)?<MeshCanvas buffer={stored[order.id]} name={order.file} colour={order.colour}/>:<Model small/>}</div><div><b>{order.file}</b><span>Material: {order.material} · Colour: {order.colour}</span><span>Quantity: {order.qty} · Infill: {order.infill}%</span></div></div><div className="timeline"><h3>Project journey</h3>{stages.map((s,i)=><div key={s} className={"timeline-row "+(i<=stages.indexOf(order.status)?"done":"")}><span>{i<stages.indexOf(order.status)?<Check size={12}/>:null}</span><b>{s}</b>{s===order.status&&<small>Current stage</small>}</div>)}</div><div className="order-meta"><div><span>Latest update</span><b>{order.activity[0]}</b></div><div><span>Due / collection</span><b>{order.due}</b><small>Collection details to be confirmed.</small></div></div></article></div></div></main>}
- {["board","detail"].includes(route)&&<div className="staff"><aside className="sidebar"><button className="plain" onClick={()=>go("home")}><Logo/></button><span className="side-label">WORKSPACE</span><nav><button className={route==="board"?"active":""} onClick={()=>go("board")}><Layers3 size={18}/> Job board</button><button className={route==="detail"?"active":""} onClick={()=>go("detail")}><FileBox size={18}/> Job detail</button><button onClick={()=>go("tracking")}><Box size={18}/> Customer view</button></nav><div className="sidebar-bottom"><span>SW</span><div><b>Studio workspace</b><small>Prototype mode</small></div></div></aside><div className="staff-main"><header className="staff-header"><span>3D Works <ChevronRight size={14}/> <b>{route==="board"?"Job board":"Job detail"}</b></span><span><i/> DEMO DATA <button onClick={()=>go("home")}>View website <ArrowUpRight size={14}/></button></span></header>
- {route==="board"&&<main className="board-page"><div className="staff-title"><div><span className="overline">OPERATIONS / OVERVIEW</span><h1>Job board</h1><p>Move jobs through the studio, from request to collection.</p></div><Btn onClick={()=>go("quote")}>New quote request <Plus size={17}/></Btn></div><div className="metrics">{[["Active jobs",jobs.filter(j=>j.status!=="Completed").length,"Across all stages"],["In production",jobs.filter(j=>["Printing","Post-Processing"].includes(j.status)).length,"Printing & finishing"],["Ready to collect",jobs.filter(j=>j.status==="Ready for Collection").length,"Awaiting pickup"],["Completed",jobs.filter(j=>j.status==="Completed").length,"Total in this demo"]].map(x=><div key={x[0]}><span>{x[0]}</span><b>{x[1]}</b><small>{x[2]}</small></div>)}</div><div className="board-tools"><div className="search"><Search size={17}/><input placeholder="Search jobs or customers" value={search} onChange={e=>setSearch(e.target.value)}/></div><div className="view-toggle"><button className={view==="board"?"active":""} onClick={()=>setView("board")}>Board</button><button className={view==="list"?"active":""} onClick={()=>setView("list")}>List</button></div></div>{view==="board"?<div className="kanban">{stages.map(s=><section className="column" key={s} onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();const id=e.dataTransfer.getData("text/plain");if(id)move(id,s)}}><div className="column-head"><i className={"dot-"+stages.indexOf(s)}/><h2>{headings[s]}</h2><span>{jobs.filter(j=>j.status===s).length}</span></div>{jobs.filter(j=>j.status===s&&(`${j.id} ${j.customer} ${j.file}`).toLowerCase().includes(search.toLowerCase())).map(j=><button draggable onDragStart={e=>e.dataTransfer.setData("text/plain",j.id)} className="job-card" key={j.id} onClick={()=>{setSelected(j.id);go("detail")}}><div className="card-top"><b>{j.id}</b><GripVertical size={15}/></div><div className="card-file"><Model small/><span>{j.file}</span></div><h3>{j.customer}</h3><div className="card-tags"><span>{j.material}</span><span>× {j.qty}</span></div>{j.status==="Printing"&&<div className="progress"><i style={{width:j.progress+"%"}}/></div>}<div className="card-bottom"><span><Clock3 size={13}/>{j.due}</span><ArrowUpRight size={16}/></div></button>)}{!jobs.some(j=>j.status===s)&&<div className="empty-column">Drop a job here</div>}</section>)}</div>:<div className="job-list"><div>JOB <span>CUSTOMER</span><span>STATUS</span><span>MATERIAL</span><span>DUE</span></div>{jobs.filter(j=>(`${j.id} ${j.customer} ${j.file}`).toLowerCase().includes(search.toLowerCase())).map(j=><button key={j.id} onClick={()=>{setSelected(j.id);go("detail")}}><span><b>{j.id}</b><small>{j.file}</small></span><span>{j.customer}</span><span><Chip status={j.status}/></span><span>{j.material} · ×{j.qty}</span><span>{j.due}</span></button>)}</div>}<p className="board-hint">Drag cards between columns, or open a job to change its status.</p></main>}
- {route==="detail"&&<main className="detail-page"><div className="back-row"><button onClick={()=>go("board")}><ChevronLeft size={16}/> Back to job board</button><span>Jobs / {active.id}</span></div><div className="detail-title"><div><span className="overline">JOB {active.id}</span> <Chip status={active.status}/><h1>{active.file}</h1><p>Submitted by {active.customer}</p></div><div><Btn outline onClick={()=>print()}><Printer size={16}/> Print job sheet</Btn><Btn outline onClick={()=>{setJobs(js=>js.map(j=>j.id===active.id?{...j,activity:["Customer update prepared (demo) · Just now",...j.activity]}:j));setToast("Customer update prepared (demo)")}}><Send size={16}/> Send update</Btn></div></div><div className="detail-grid"><div className="detail-left"><Viewer name={active.file} buffer={stored[active.id]??null} colour={active.colour}/><section className="panel"><div className="panel-title"><h2>Print specifications</h2><span>Customer request</span></div><div className="specs">{[["Material",active.material],["Colour",active.colour],["Quality / layer height",active.quality],["Infill",active.infill+"%"],["Quantity",active.qty+" pieces"],["Dimensions / weight","Pending file review"]].map(x=><div key={x[0]}><span>{x[0]}</span><b>{x[1]}</b></div>)}</div></section><section className="panel"><div className="panel-title"><h2>Internal notes</h2><span>Visible to staff only</span></div><p className="note-text">{active.note}</p><div className="add-note"><input placeholder="Add a note for the team..." value={staffNote} onChange={e=>setStaffNote(e.target.value)}/><button onClick={()=>{if(!staffNote.trim())return;setJobs(js=>js.map(j=>j.id===active.id?{...j,note:staffNote,activity:["Internal note added · Just now",...j.activity]}:j));setStaffNote("");setToast("Note saved")}}>Add note</button></div></section><section className="panel"><div className="panel-title"><h2>Activity</h2><span>Latest first</span></div><div className="activity">{active.activity.map((a,i)=><div key={a+i}><i/><span>{a}</span></div>)}</div></section></div><aside className="detail-right"><section className="panel status-panel"><div className="panel-title"><h2>Job status</h2></div><Chip status={active.status}/><p>Keep this job moving through the studio.</p>{active.status==="Printing"&&<div className="staff-progress"><span>Print progress <b>{active.progress}%</b></span><div className="progress"><i style={{width:active.progress+"%"}}/></div><input type="range" min="0" max="100" value={active.progress} onChange={e=>setJobs(js=>js.map(j=>j.id===active.id?{...j,progress:Number(e.target.value)}:j))}/></div>}<label>Change stage<Select value={active.status} change={s=>move(active.id,s as Stage)} options={stages}/></label>{stages.indexOf(active.status)<6&&<Btn onClick={()=>move(active.id,stages[stages.indexOf(active.status)+1])}>Move to {stages[stages.indexOf(active.status)+1]} <ArrowRight size={16}/></Btn>}</section><section className="panel info"><div className="panel-title"><h2>Customer</h2></div><b>{active.customer}</b><a href={"mailto:"+active.email}><Mail size={15}/>{active.email}</a></section><section className="panel info"><div className="panel-title"><h2>Schedule & file</h2></div><div><span>Due / collection</span><b>{active.due}</b></div><div><span>Uploaded file</span><b>{active.file}</b></div><div><span>File type</span><b>{active.file.split(".").pop()?.toUpperCase()}</b></div><button onClick={()=>download(active)}>Download original <ArrowUpRight size={14}/></button></section><section className="panel info"><div className="panel-title"><h2>Quote summary</h2></div><div><span>Indicative quote</span><b>{money(active.price)}</b></div><div><span>Payment status</span><b>Not connected</b></div><p>Prototype estimate; final pricing requires file review.</p></section></aside></div></main>}
- </div></div>}
- {toast&&<div role="status" className="toast"><Check size={17}/>{toast}<button onClick={()=>setToast("")}><X size={15}/></button></div>}
- </div>
+
+function Model() {
+  return (
+    <div className="model">
+      <div className="model-grid" />
+      <div className="model-shape">
+        <span className="shape-top" />
+        <span className="shape-front"><i /><i /></span>
+        <span className="shape-side" />
+      </div>
+      <span className="model-axis">X <b>Y</b> Z</span>
+    </div>
+  );
+}
+
+export default function Home() {
+  const supabase = getSupabase();
+  const [route, setRoute] = useState<Route>("home");
+  const [user, setUser] = useState<User | null>(null);
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [options, setOptions] = useState<Option[]>([]);
+  const [selectedId, setSelectedId] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [buffer, setBuffer] = useState<ArrayBuffer | null>(null);
+  const [material, setMaterial] = useState("");
+  const [colour, setColour] = useState("");
+  const [quality, setQuality] = useState("Standard · 0.20 mm");
+  const [infill, setInfill] = useState(20);
+  const [qty, setQty] = useState(1);
+  const [note, setNote] = useState("");
+  const [staffNote, setStaffNote] = useState("");
+  const [progress, setProgress] = useState(0);
+  const [due, setDue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [menu, setMenu] = useState(false);
+  const [recovery, setRecovery] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const isStaff =
+    profile?.active && (profile.role === "staff" || profile.role === "admin");
+  const materialTypes = useMemo(
+    () => [...new Set(options.map((o) => o.material_type))],
+    [options],
+  );
+  const chosenMaterial = materialTypes.includes(material)
+    ? material
+    : (materialTypes[0] ?? "");
+  const colours = useMemo(
+    () =>
+      options
+        .filter((o) => o.material_type === chosenMaterial)
+        .map((o) => o.colour),
+    [options, chosenMaterial],
+  );
+  const chosenColour = colours.includes(colour) ? colour : (colours[0] ?? "");
+  const selected = jobs.find((job) => job.id === selectedId) ?? jobs[0];
+
+  const load = useCallback(async () => {
+    if (!supabase) return;
+    const { data: sessionData } = await supabase.auth.getSession();
+    const currentUser = sessionData.session?.user ?? null;
+    setUser(currentUser);
+    if (!currentUser) {
+      setProfile(null);
+      setJobs([]);
+      return;
+    }
+    const [profileResult, jobsResult] = await Promise.all([
+      supabase.from("profiles").select("*").eq("id", currentUser.id).single(),
+      supabase
+        .from("jobs")
+        .select("*")
+        .order("created_at", { ascending: false }),
+    ]);
+    if (profileResult.error) setMessage(profileResult.error.message);
+    else setProfile(profileResult.data as Profile);
+    if (jobsResult.error) {
+      setMessage(jobsResult.error.message);
+      return;
+    }
+    const rows = jobsResult.data ?? [];
+    const events = rows.length
+      ? await supabase
+          .from("job_events")
+          .select("job_id,message,created_at")
+          .in(
+            "job_id",
+            rows.map((row) => row.id),
+          )
+          .order("created_at", { ascending: false })
+      : { data: [], error: null };
+    if (events.error) setMessage(events.error.message);
+    const converted = rows.map((row) =>
+      toJob(
+        row,
+        (events.data ?? [])
+          .filter((event) => event.job_id === row.id)
+          .map((event) => event.message),
+      ),
+    );
+    setJobs(converted);
+    setSelectedId((current) =>
+      current && converted.some((job) => job.id === current)
+        ? current
+        : (converted.find((job) => job.customerId === currentUser.id)?.id ??
+          converted[0]?.id ??
+          ""),
+    );
+  }, [supabase]);
+
+  useEffect(() => {
+    const valid: Route[] = [
+      "home",
+      "quote",
+      "tracking",
+      "board",
+      "detail",
+      "admin",
+      "account",
+    ];
+    const syncRoute = () => {
+      const hash = location.hash.slice(1) as Route;
+      setRoute(valid.includes(hash) ? hash : "home");
+    };
+    syncRoute();
+    if (new URLSearchParams(location.search).has("invite")) {
+      setTimeout(() => {
+        setRecovery(true);
+        location.hash = "account";
+      }, 0);
+    }
+    window.addEventListener("hashchange", syncRoute);
+    if (!supabase)
+      return () => window.removeEventListener("hashchange", syncRoute);
+    const initialLoad = setTimeout(() => {
+      void load();
+    }, 0);
+    void supabase.rpc("list_material_options").then(({ data, error }) => {
+      if (error) setMessage(error.message);
+      else setOptions((data ?? []) as Option[]);
+    });
+    const { data: listener } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "PASSWORD_RECOVERY") {
+        setRecovery(true);
+        location.hash = "account";
+      }
+      if (
+        event === "SIGNED_IN" ||
+        event === "SIGNED_OUT" ||
+        event === "USER_UPDATED"
+      )
+        setTimeout(() => {
+          void load();
+        }, 0);
+    });
+    return () => {
+      clearTimeout(initialLoad);
+      window.removeEventListener("hashchange", syncRoute);
+      listener.subscription.unsubscribe();
+    };
+  }, [load, supabase]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setStaffNote(selected?.note ?? "");
+      setProgress(selected?.progress ?? 0);
+      setDue(
+        selected?.due && selected.due !== "To be confirmed" ? selected.due : "",
+      );
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [selected?.id, selected?.note, selected?.progress, selected?.due]);
+
+  function go(next: Route) {
+    location.hash = next;
+    setRoute(next);
+    setMenu(false);
+    setMessage("");
+    window.scrollTo(0, 0);
+  }
+  function pick(next: File | undefined) {
+    if (!next) return;
+    if (!modelFile(next.name)) {
+      setMessage("Choose an STL, OBJ, or 3MF model file.");
+      return;
+    }
+    if (next.size > 50 * 1024 * 1024) {
+      setMessage("The model must be under 50 MB.");
+      return;
+    }
+    setFile(next);
+    void next
+      .arrayBuffer()
+      .then(setBuffer)
+      .catch(() => setMessage("Could not open that file."));
+  }
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!supabase || !user) {
+      go("account");
+      return;
+    }
+    if (!profile?.active || !file || !chosenMaterial || !chosenColour) {
+      setMessage("Choose a model, material, and colour.");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    let path = "";
+    try {
+      path = `${user.id}/${crypto.randomUUID()}/${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+      const upload = await supabase.storage.from("models").upload(path, file, {
+        contentType: "application/octet-stream",
+        upsert: false,
+      });
+      if (upload.error) throw upload.error;
+      const created = await supabase
+        .from("jobs")
+        .insert({
+          customer_id: user.id,
+          customer_name: profile.display_name || user.email || "Customer",
+          customer_email: user.email,
+          file_path: path,
+          file_name: file.name,
+          material: chosenMaterial,
+          colour: chosenColour,
+          quality,
+          infill,
+          qty,
+          customer_note: note.trim(),
+        })
+        .select("id")
+        .single();
+      if (created.error || !created.data)
+        throw created.error ?? new Error("Could not create order");
+      setSelectedId(created.data.id);
+      const quote = await supabase.functions.invoke("estimate-quote", {
+        body: { jobId: created.data.id },
+      });
+      await load();
+      setFile(null);
+      setBuffer(null);
+      setNote("");
+      go("tracking");
+      if (quote.error || quote.data?.error)
+        setMessage(
+          "Request saved. Automatic pricing is pending: " +
+            (quote.data?.error ?? quote.error?.message),
+        );
+      else if (quote.data?.provisional)
+        setMessage(
+          "Your sample estimate is ready. Checkout opens after the studio approves its pricing settings.",
+        );
+      else
+        setMessage(
+          "Your automatic estimate is ready. Review it before confirming the order.",
+        );
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Could not submit the request.",
+      );
+      if (path) await supabase.storage.from("models").remove([path]);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirm(job: Job) {
+    if (
+      !supabase ||
+      job.price === null ||
+      job.status !== "Quoted" ||
+      job.pricingProvisional
+    )
+      return;
+    setBusy(true);
+    setMessage("");
+    const { error } = await supabase.rpc("approve_quote", {
+      target_job_id: job.id,
+    });
+    if (error) setMessage(error.message);
+    else {
+      await load();
+      setMessage("Order confirmed. The studio can now begin production.");
+    }
+    setBusy(false);
+  }
+  async function refreshEstimate(job: Job) {
+    if (
+      !supabase ||
+      job.customerId !== user?.id ||
+      !["Submitted", "Quoted"].includes(job.status)
+    )
+      return;
+    setBusy(true);
+    setMessage("");
+    const { data, error } = await supabase.functions.invoke("estimate-quote", {
+      body: { jobId: job.id },
+    });
+    await load();
+    setMessage(
+      error
+        ? error.message
+        : data?.error
+          ? String(data.error)
+          : data?.provisional
+            ? "Sample estimate refreshed. The studio must approve pricing before checkout."
+            : "Estimate refreshed. Review the amount before confirming.",
+    );
+    setBusy(false);
+  }
+  async function saveJob(job: Job, nextStage: Stage) {
+    if (!supabase || !isStaff) return;
+    setBusy(true);
+    setMessage("");
+    const { error } = await supabase
+      .from("jobs")
+      .update({
+        status: nextStage,
+        progress: Number(progress),
+        due_date: due || null,
+        staff_note: staffNote.trim(),
+      })
+      .eq("id", job.id);
+    if (error) setMessage(error.message);
+    else {
+      await load();
+      setMessage("Job updated.");
+    }
+    setBusy(false);
+  }
+  async function download(job: Job) {
+    if (!supabase) return;
+    const { data, error } = await supabase.storage
+      .from("models")
+      .download(job.filePath);
+    if (error || !data) {
+      setMessage(error?.message ?? "Could not download file.");
+      return;
+    }
+    const url = URL.createObjectURL(data);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = job.file;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  async function signOut() {
+    if (supabase) await supabase.auth.signOut();
+    go("home");
+  }
+
+  const nav = (
+    <>
+      <button
+        className={route === "home" ? "active" : ""}
+        onClick={() => go("home")}
+      >
+        Home
+      </button>
+      <button
+        className={route === "quote" ? "active" : ""}
+        onClick={() => go("quote")}
+      >
+        Get an estimate
+      </button>
+      {user && (
+        <button
+          className={route === "tracking" ? "active" : ""}
+          onClick={() => go("tracking")}
+        >
+          My orders
+        </button>
+      )}
+      {isStaff && (
+        <button
+          className={route === "board" ? "active" : ""}
+          onClick={() => go("board")}
+        >
+          Staff workspace
+        </button>
+      )}
+      {profile?.role === "admin" && (
+        <button onClick={() => go("admin")}>Admin</button>
+      )}
+    </>
+  );
+  return (
+    <div className="app">
+      <header className="public-header">
+        <div className="wrap header-in">
+          <button className="plain" onClick={() => go("home")}>
+            <Logo />
+          </button>
+          <nav>{nav}</nav>
+          <div className="header-end">
+            {user ? (
+              <button className="btn outline" onClick={signOut}>
+                <LogOut size={15} /> Sign out
+              </button>
+            ) : (
+              <button className="btn outline" onClick={() => go("account")}>
+                Sign in <ArrowUpRight size={15} />
+              </button>
+            )}
+            <button className="btn" onClick={() => go("quote")}>
+              Get an estimate <ArrowRight size={16} />
+            </button>
+          </div>
+          <button
+            className="mobile-menu plain"
+            aria-label="Open menu"
+            onClick={() => setMenu(!menu)}
+          >
+            {menu ? <X /> : <Menu />}
+          </button>
+        </div>
+        {menu && (
+          <nav className="mobile-nav">
+            {nav}
+            {user ? (
+              <button onClick={signOut}>Sign out</button>
+            ) : (
+              <button onClick={() => go("account")}>Sign in</button>
+            )}
+          </nav>
+        )}
+      </header>
+      {message && (
+        <div className="site-message wrap" role="status">
+          {message}
+          <button aria-label="Dismiss message" onClick={() => setMessage("")}>
+            <X size={16} />
+          </button>
+        </div>
+      )}
+      {route === "home" && (
+        <main>
+          <section className="hero">
+            <div className="wrap hero-grid">
+              <div className="hero-copy">
+                <span className="eyebrow">MADE REAL, LAYER BY LAYER</span>
+                <h1>
+                  3D Printing
+                  <br />
+                  <em>Services.</em>
+                </h1>
+                <p>
+                  From one-off prototypes to useful parts. Upload your 3D model,
+                  see an automatic estimate, and follow your order through
+                  production.
+                </p>
+                <div className="hero-actions">
+                  <button className="btn" onClick={() => go("quote")}>
+                    Start a project <ArrowRight size={17} />
+                  </button>
+                  <button
+                    className="btn outline"
+                    onClick={() => go("tracking")}
+                  >
+                    Track an order <ArrowUpRight size={17} />
+                  </button>
+                </div>
+                <div className="hero-proof">
+                  <span>01 / UPLOAD</span>
+                  <span>02 / ESTIMATE</span>
+                  <span>03 / CONFIRM</span>
+                  <span>04 / PRINT</span>
+                </div>
+              </div>
+              <div className="hero-art">
+                <div className="art-top">
+                  <span>3D CRAFTWORX / PRINT STUDIO</span>
+                  <span>01 — 04</span>
+                </div>
+                <Model />
+                <div className="art-bottom">
+                  <span>
+                    <b>Make it possible.</b>
+                    <small>Custom parts. Thoughtful results.</small>
+                  </span>
+                  <span className="circle-arrow">
+                    <ArrowUpRight />
+                  </span>
+                </div>
+              </div>
+            </div>
+          </section>
+          <section className="section light">
+            <div className="wrap">
+              <div className="section-head">
+                <div>
+                  <span className="overline">THE PROCESS</span>
+                  <h2>Simple from the first file.</h2>
+                </div>
+                <p>
+                  Your account keeps every project, model, estimate and status
+                  update in one place.
+                </p>
+              </div>
+              <div className="steps">
+                {[
+                  [
+                    "01",
+                    <UploadCloud key="upload" />,
+                    "Share your design",
+                    "Upload an STL, OBJ or 3MF and choose your material.",
+                  ],
+                  [
+                    "02",
+                    <Layers3 key="layers" />,
+                    "See your estimate",
+                    "Our pricing service calculates from model geometry and current cost settings.",
+                  ],
+                  [
+                    "03",
+                    <Check key="check" />,
+                    "Confirm your order",
+                    "Review the estimate at checkout and confirm when you are ready.",
+                  ],
+                ].map(([number, icon, title, body]) => (
+                  <div className="step" key={String(number)}>
+                    <div>
+                      <span>{number} / 03</span>
+                      <span className="step-icon">{icon}</span>
+                    </div>
+                    <h3>{title}</h3>
+                    <p>{body}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
+          <section className="section capabilities">
+            <div className="wrap cap-grid">
+              <div>
+                <span className="overline">WHAT WE MAKE</span>
+                <h2>
+                  Useful objects.
+                  <br />
+                  <em>Made beautifully.</em>
+                </h2>
+                <p>
+                  Prototypes, functional parts and custom pieces for makers,
+                  studios and businesses.
+                </p>
+                <button className="btn outline" onClick={() => go("quote")}>
+                  Start your project <ArrowUpRight size={16} />
+                </button>
+              </div>
+              <div className="cap-list">
+                {[
+                  [
+                    "01",
+                    "Rapid prototypes",
+                    "Test fit and form before you commit.",
+                  ],
+                  ["02", "Functional parts", "Bring a useful design to life."],
+                  ["03", "Custom pieces", "Make something distinctly yours."],
+                ].map((item) => (
+                  <div className="cap-row" key={item[0]}>
+                    <span>{item[0]}</span>
+                    <div>
+                      <h3>{item[1]}</h3>
+                      <p>{item[2]}</p>
+                    </div>
+                    <ArrowUpRight />
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
+          <section className="cta">
+            <div className="wrap cta-grid">
+              <div>
+                <span className="overline">LET&apos;S MAKE IT HAPPEN</span>
+                <h2>Have a file in mind?</h2>
+                <p>Create an account and request your estimate.</p>
+              </div>
+              <button className="btn" onClick={() => go("quote")}>
+                Get started <ArrowRight size={17} />
+              </button>
+            </div>
+          </section>
+          <footer>
+            <div className="wrap footer-grid">
+              <div>
+                <Logo />
+                <p>Ideas made tangible.</p>
+              </div>
+              <div>
+                <span>EXPLORE</span>
+                <button onClick={() => go("quote")}>Get an estimate</button>
+                <button onClick={() => go("tracking")}>My orders</button>
+              </div>
+              <div>
+                <span>CRAFTWORX</span>
+                <p>South Africa</p>
+              </div>
+            </div>
+            <div className="wrap footer-bottom">
+              <span>© 2026 3D Craftworx.</span>
+              <span>MADE REAL, LAYER BY LAYER</span>
+            </div>
+          </footer>
+        </main>
+      )}
+      {route === "account" && (
+        <main className="page account-page wrap">
+          <AuthPanel
+            recovery={recovery}
+            onComplete={() => {
+              setRecovery(false);
+              history.replaceState(null, "", location.pathname + location.hash);
+              void load();
+              go("tracking");
+            }}
+          />
+        </main>
+      )}
+      {route === "quote" && (
+        <main className="page quote-page">
+          <div className="wrap">
+            <div className="page-head">
+              <span className="overline">START A PROJECT</span>
+              <h1>Let&apos;s make it real.</h1>
+              <p>
+                Upload a model and choose how you want it printed. We calculate
+                an estimate automatically.
+              </p>
+            </div>
+            {!user ? (
+              <div className="gate">
+                <AuthPanel onComplete={() => void load()} />
+              </div>
+            ) : !profile?.active ? (
+              <div className="panel gate">
+                <h2>Account unavailable</h2>
+                <p>Contact the site administrator for account access.</p>
+              </div>
+            ) : (
+              <form className="quote-grid" onSubmit={submit}>
+                <div className="quote-main">
+                  <section className="panel">
+                    <div className="panel-head">
+                      <span>01</span>
+                      <div>
+                        <h2>Your model</h2>
+                        <p>STL, OBJ or 3MF, up to 50 MB</p>
+                      </div>
+                    </div>
+                    <input
+                      className="sr-only"
+                      ref={fileInput}
+                      type="file"
+                      accept=".stl,.obj,.3mf"
+                      onChange={(e) => pick(e.target.files?.[0])}
+                    />
+                    <div
+                      className="drop"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => fileInput.current?.click()}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ")
+                          fileInput.current?.click();
+                      }}
+                      onDragOver={(e) => e.preventDefault()}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        pick(e.dataTransfer.files[0]);
+                      }}
+                    >
+                      <span>
+                        <UploadCloud size={28} />
+                      </span>
+                      <b>{file?.name ?? "Drop your model here"}</b>
+                      <p>or click to browse your files</p>
+                    </div>
+                  </section>
+                  <section className="panel">
+                    <div className="panel-head">
+                      <span>02</span>
+                      <div>
+                        <h2>Print preferences</h2>
+                        <p>Choose the essentials</p>
+                      </div>
+                    </div>
+                    <div className="fields">
+                      <label>
+                        Material
+                        <select
+                          value={chosenMaterial}
+                          onChange={(e) => setMaterial(e.target.value)}
+                          required
+                        >
+                          {materialTypes.length ? (
+                            materialTypes.map((item) => (
+                              <option key={item}>{item}</option>
+                            ))
+                          ) : (
+                            <option value="">
+                              No materials configured yet
+                            </option>
+                          )}
+                        </select>
+                      </label>
+                      <label>
+                        Colour
+                        <select
+                          value={chosenColour}
+                          onChange={(e) => setColour(e.target.value)}
+                          required
+                        >
+                          {colours.map((item) => (
+                            <option key={item}>{item}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        Quality
+                        <select
+                          value={quality}
+                          onChange={(e) => setQuality(e.target.value)}
+                        >
+                          {[
+                            "Draft · 0.28 mm",
+                            "Standard · 0.20 mm",
+                            "Fine · 0.12 mm",
+                          ].map((item) => (
+                            <option key={item}>{item}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        Quantity
+                        <input
+                          type="number"
+                          min="1"
+                          max="100"
+                          value={qty}
+                          onChange={(e) => setQty(Number(e.target.value))}
+                        />
+                      </label>
+                      <label className="wide">
+                        Infill · {infill}%
+                        <input
+                          type="range"
+                          min="10"
+                          max="80"
+                          step="5"
+                          value={infill}
+                          onChange={(e) => setInfill(Number(e.target.value))}
+                        />
+                      </label>
+                      <label className="wide">
+                        Notes
+                        <textarea
+                          rows={3}
+                          value={note}
+                          onChange={(e) => setNote(e.target.value)}
+                          placeholder="Fit, finish, use or deadline details"
+                        />
+                      </label>
+                    </div>
+                  </section>
+                </div>
+                <aside className="quote-aside">
+                  <section className="panel preview-panel">
+                    {buffer && file ? (
+                      <MeshCanvas
+                        buffer={buffer}
+                        name={file.name}
+                        colour={colour}
+                      />
+                    ) : (
+                      <div className="preview-placeholder">
+                        <FileBox size={48} />
+                        <span>Model preview</span>
+                      </div>
+                    )}
+                  </section>
+                  <section className="panel estimate">
+                    <span className="overline">AUTOMATIC ESTIMATE</span>
+                    <strong>Calculated after upload</strong>
+                    <p>
+                      Based on model geometry and current pricing settings. The
+                      amount is an estimate and is confirmed when you place the
+                      order. No payment is collected online.
+                    </p>
+                    <button
+                      className="btn"
+                      type="submit"
+                      disabled={
+                        busy || !file || !chosenMaterial || !chosenColour
+                      }
+                    >
+                      {busy ? "Calculating…" : "Upload and calculate"}{" "}
+                      <ArrowRight size={17} />
+                    </button>
+                  </section>
+                </aside>
+              </form>
+            )}
+          </div>
+        </main>
+      )}
+      {route === "tracking" && (
+        <main className="page tracking-page">
+          <div className="wrap">
+            <div className="page-head row">
+              <div>
+                <span className="overline">YOUR ACCOUNT</span>
+                <h1>My orders.</h1>
+                <p>Review estimates and follow production updates.</p>
+              </div>
+              <button className="btn" onClick={() => go("quote")}>
+                New project <Plus size={16} />
+              </button>
+            </div>
+            {!user ? (
+              <AuthPanel onComplete={() => void load()} />
+            ) : jobs.length === 0 ? (
+              <div className="empty-state panel">
+                <FileBox size={38} />
+                <h2>No orders yet</h2>
+                <p>Upload your first model to get an automatic estimate.</p>
+                <button className="btn" onClick={() => go("quote")}>
+                  Start a project
+                </button>
+              </div>
+            ) : (
+              <div className="tracking-grid">
+                <aside className="orders">
+                  <div className="orders-title">
+                    <h2>Orders</h2>
+                    <span>{jobs.length}</span>
+                  </div>
+                  {jobs
+                    .filter((job) => job.customerId === user.id)
+                    .map((job) => (
+                      <button
+                        key={job.id}
+                        className={
+                          "order " + (selected?.id === job.id ? "selected" : "")
+                        }
+                        onClick={() => setSelectedId(job.id)}
+                      >
+                        <span className="mini-model">
+                          <FileBox />
+                        </span>
+                        <span>
+                          <b>{job.code}</b>
+                          <small>{job.file}</small>
+                          <span className="chip">{job.status}</span>
+                        </span>
+                      </button>
+                    ))}
+                </aside>
+                {selected && selected.customerId === user.id && (
+                  <article className="order-detail">
+                    <div className="order-top">
+                      <div>
+                        <span className="overline">ORDER {selected.code}</span>
+                        <h2>{selected.file}</h2>
+                        <p>
+                          {selected.material} · {selected.colour} ·{" "}
+                          {selected.qty} piece{selected.qty === 1 ? "" : "s"}
+                        </p>
+                      </div>
+                      <span className="chip">{selected.status}</span>
+                    </div>
+                    <div className="current-stage">
+                      <span>CURRENT STAGE</span>
+                      <h3>{selected.status}</h3>
+                      <p>
+                        {selected.pricingError
+                          ? "We could not calculate this estimate yet. The studio will investigate the model or pricing configuration."
+                          : selected.status === "Submitted"
+                            ? "Your file is being measured for an automatic estimate."
+                            : selected.status === "Quoted"
+                              ? "Your estimate is ready to review."
+                              : "Your order is progressing through the studio."}
+                      </p>
+                    </div>
+                    <div className="checkout-card">
+                      <span className="overline">ORDER ESTIMATE</span>
+                      <strong>
+                        {selected.price === null
+                          ? "Calculating…"
+                          : money(selected.price)}
+                      </strong>
+                      <p>
+                        Calculated from the uploaded geometry. Confirm this
+                        amount at checkout to place your order. No payment is
+                        collected online.
+                      </p>
+                      {selected.pricingProvisional &&
+                        selected.price !== null && (
+                          <p>
+                            Sample pricing is awaiting administrator approval.
+                          </p>
+                        )}
+                      {(selected.pricingProvisional ||
+                        selected.pricingError) && (
+                        <button
+                          className="btn outline"
+                          disabled={busy}
+                          onClick={() => refreshEstimate(selected)}
+                        >
+                          Refresh estimate
+                        </button>
+                      )}
+                      {selected.status === "Quoted" &&
+                        !selected.pricingProvisional && (
+                          <button
+                            className="btn"
+                            disabled={busy}
+                            onClick={() => confirm(selected)}
+                          >
+                            <Check size={16} /> Confirm order
+                          </button>
+                        )}
+                    </div>
+                    {selected.note && (
+                      <p className="note-text">Studio note: {selected.note}</p>
+                    )}
+                    <div className="order-meta">
+                      <div>
+                        <span>Material</span>
+                        <b>
+                          {selected.material} / {selected.colour}
+                        </b>
+                      </div>
+                      <div>
+                        <span>Due date</span>
+                        <b>{selected.due}</b>
+                      </div>
+                    </div>
+                    <div className="timeline">
+                      <h3>Project journey</h3>
+                      {stages.map((stage, index) => (
+                        <div
+                          key={stage}
+                          className={
+                            "timeline-row " +
+                            (index <= stages.indexOf(selected.status)
+                              ? "done"
+                              : "")
+                          }
+                        >
+                          <span>
+                            {index < stages.indexOf(selected.status) && (
+                              <Check size={12} />
+                            )}
+                          </span>
+                          <b>{stage}</b>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="activity">
+                      <h3>Updates</h3>
+                      {selected.activity.map((item, index) => (
+                        <div key={index}>
+                          <i />
+                          {item}
+                        </div>
+                      ))}
+                    </div>
+                    <button
+                      className="text-action"
+                      onClick={() => download(selected)}
+                    >
+                      Download your model
+                    </button>
+                  </article>
+                )}
+              </div>
+            )}
+          </div>
+        </main>
+      )}
+      {(route === "board" || route === "detail" || route === "admin") && (
+        <main className="staff-shell">
+          <div className="wrap">
+            {!user ? (
+              <AuthPanel onComplete={() => void load()} />
+            ) : !isStaff || (route === "admin" && profile?.role !== "admin") ? (
+              <div className="panel gate">
+                <h2>Staff access required</h2>
+                <p>Your account does not have access to this workspace.</p>
+              </div>
+            ) : (
+              <>
+                <div className="staff-title">
+                  <div>
+                    <span className="overline">3D CRAFTWORX / OPERATIONS</span>
+                    <h1>
+                      {route === "admin"
+                        ? "Administration"
+                        : route === "detail"
+                          ? "Job detail"
+                          : "Job board"}
+                    </h1>
+                    <p>
+                      Orders and production, updated in real time from the
+                      shared database.
+                    </p>
+                  </div>
+                  <div className="workspace-nav">
+                    <button onClick={() => go("board")}>Job board</button>
+                    {profile?.role === "admin" && (
+                      <button onClick={() => go("admin")}>
+                        Settings & staff
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {route === "admin" ? (
+                  <AdminPanel />
+                ) : route === "board" ? (
+                  <div className="kanban">
+                    {stages.map((stage) => (
+                      <section className="column" key={stage}>
+                        <div className="column-head">
+                          <h2>{stage}</h2>
+                          <span>
+                            {jobs.filter((job) => job.status === stage).length}
+                          </span>
+                        </div>
+                        {jobs
+                          .filter((job) => job.status === stage)
+                          .map((job) => (
+                            <button
+                              className="job-card"
+                              key={job.id}
+                              onClick={() => {
+                                setSelectedId(job.id);
+                                go("detail");
+                              }}
+                            >
+                              <div className="card-top">
+                                <b>{job.code}</b>
+                                <ArrowUpRight size={16} />
+                              </div>
+                              <h3>{job.file}</h3>
+                              <p>{job.customer}</p>
+                              <div className="card-tags">
+                                <span>{job.material}</span>
+                                <span>× {job.qty}</span>
+                              </div>
+                              <div className="card-bottom">
+                                <span>
+                                  {job.price === null
+                                    ? "Estimate pending"
+                                    : money(job.price)}
+                                </span>
+                              </div>
+                            </button>
+                          ))}
+                        {!jobs.some((job) => job.status === stage) && (
+                          <div className="empty-column">No jobs</div>
+                        )}
+                      </section>
+                    ))}
+                  </div>
+                ) : selected ? (
+                  <div className="detail-grid">
+                    <section className="panel">
+                      <button
+                        className="text-action"
+                        onClick={() => go("board")}
+                      >
+                        ← Back to board
+                      </button>
+                      <h2>
+                        {selected.code} · {selected.file}
+                      </h2>
+                      <p>
+                        {selected.customer} · {selected.email}
+                      </p>
+                      <div className="specs">
+                        {[
+                          ["Material", selected.material],
+                          ["Colour", selected.colour],
+                          ["Quality", selected.quality],
+                          ["Infill", selected.infill + "%"],
+                          ["Quantity", selected.qty],
+                          [
+                            "Estimate",
+                            selected.price === null
+                              ? "Pending"
+                              : money(selected.price),
+                          ],
+                        ].map(([label, value]) => (
+                          <div key={String(label)}>
+                            <span>{label}</span>
+                            <b>{value}</b>
+                          </div>
+                        ))}
+                      </div>
+                      <p className="note-text">
+                        {selected.customerNote || "No customer notes."}
+                      </p>
+                      <button
+                        className="btn outline"
+                        onClick={() => download(selected)}
+                      >
+                        Download model
+                      </button>
+                      <div className="activity">
+                        <h3>Activity</h3>
+                        {selected.activity.map((item, index) => (
+                          <div key={index}>
+                            <i />
+                            {item}
+                          </div>
+                        ))}
+                      </div>
+                    </section>
+                    <section className="panel status-panel">
+                      <h2>Production update</h2>
+                      <p>
+                        Customer accounts see the current stage and public
+                        updates.
+                      </p>
+                      <label>
+                        Stage
+                        <select
+                          value={selected.status}
+                          onChange={(e) => {
+                            const stage = e.target.value as Stage;
+                            if (stage !== "Quoted")
+                              void saveJob(selected, stage);
+                          }}
+                        >
+                          {stages
+                            .filter(
+                              (stage) =>
+                                stage !== "Quoted" ||
+                                selected.status === "Quoted",
+                            )
+                            .map((stage) => (
+                              <option key={stage}>{stage}</option>
+                            ))}
+                        </select>
+                      </label>
+                      <label>
+                        Progress · {progress}%
+                        <input
+                          type="range"
+                          min="0"
+                          max="100"
+                          value={progress}
+                          onChange={(e) => setProgress(Number(e.target.value))}
+                        />
+                      </label>
+                      <label>
+                        Due date
+                        <input
+                          type="date"
+                          value={due}
+                          onChange={(e) => setDue(e.target.value)}
+                        />
+                      </label>
+                      <label>
+                        Customer-facing note
+                        <textarea
+                          rows={4}
+                          value={staffNote}
+                          onChange={(e) => setStaffNote(e.target.value)}
+                        />
+                      </label>
+                      <button
+                        className="btn"
+                        disabled={busy}
+                        onClick={() => saveJob(selected, selected.status)}
+                      >
+                        Save update
+                      </button>
+                    </section>
+                  </div>
+                ) : (
+                  <div className="panel empty-state">No jobs yet.</div>
+                )}
+              </>
+            )}
+          </div>
+        </main>
+      )}
+    </div>
+  );
 }

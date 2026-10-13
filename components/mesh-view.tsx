@@ -60,8 +60,10 @@ export function MeshCanvas({
   const host = useRef<HTMLDivElement>(null);
   const onSizeRef = useRef(onSize);
   const onErrorRef = useRef(onError);
-  onSizeRef.current = onSize;
-  onErrorRef.current = onError;
+  useEffect(() => {
+    onSizeRef.current = onSize;
+    onErrorRef.current = onError;
+  }, [onSize, onError]);
 
   useEffect(() => {
     const el = host.current;
