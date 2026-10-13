@@ -1,6 +1,7 @@
 -- Public source contains structure only. Import the client's cost workbook into
 -- these private tables after provisioning the Supabase project.
 create extension if not exists pgcrypto;
+create schema if not exists app_private;
 
 create type public.app_role as enum ('customer', 'staff', 'admin');
 create type public.job_stage as enum (
@@ -16,7 +17,7 @@ create table public.profiles (
   created_at timestamptz not null default now()
 );
 
-create function public.create_profile_for_user() returns trigger
+create function app_private.create_profile_for_user() returns trigger
 language plpgsql security definer set search_path = '' as $$
 begin
   insert into public.profiles (id, display_name)
@@ -26,9 +27,9 @@ end;
 $$;
 
 create trigger on_auth_user_created after insert on auth.users
-for each row execute function public.create_profile_for_user();
+for each row execute function app_private.create_profile_for_user();
 
-create function public.is_staff() returns boolean
+create function app_private.is_staff() returns boolean
 language sql stable security definer set search_path = '' as $$
   select exists (
     select 1 from public.profiles
@@ -36,7 +37,7 @@ language sql stable security definer set search_path = '' as $$
   );
 $$;
 
-create function public.is_admin() returns boolean
+create function app_private.is_admin() returns boolean
 language sql stable security definer set search_path = '' as $$
   select exists (
     select 1 from public.profiles
@@ -75,7 +76,7 @@ create table public.jobs (
 create index jobs_customer_created_idx on public.jobs(customer_id, created_at desc);
 create index jobs_status_created_idx on public.jobs(status, created_at desc);
 
-create function public.on_job_insert() returns trigger
+create function app_private.on_job_insert() returns trigger
 language plpgsql security definer set search_path = '' as $$
 begin
   new.customer_email := (select email from auth.users where id = new.customer_id);
@@ -92,17 +93,22 @@ begin
 end;
 $$;
 create trigger jobs_before_insert before insert on public.jobs
-for each row execute function public.on_job_insert();
+for each row execute function app_private.on_job_insert();
 
-create function public.touch_job() returns trigger
+create function app_private.touch_job() returns trigger
 language plpgsql security definer set search_path = '' as $$
 begin
+  if new.status in ('Approved', 'Printing', 'Post-Processing',
+                    'Ready for Collection', 'Completed')
+     and new.approved_at is null then
+    raise exception 'Customer confirmation is required before production';
+  end if;
   new.updated_at := now();
   return new;
 end;
 $$;
 create trigger jobs_before_update before update on public.jobs
-for each row execute function public.touch_job();
+for each row execute function app_private.touch_job();
 
 create table public.job_events (
   id bigint generated always as identity primary key,
@@ -114,7 +120,7 @@ create table public.job_events (
 );
 create index job_events_job_time_idx on public.job_events(job_id, created_at desc);
 
-create function public.log_job_stage() returns trigger
+create function app_private.log_job_stage() returns trigger
 language plpgsql security definer set search_path = '' as $$
 begin
   if tg_op = 'INSERT' then
@@ -127,9 +133,9 @@ begin
 end;
 $$;
 create trigger jobs_after_insert after insert on public.jobs
-for each row execute function public.log_job_stage();
+for each row execute function app_private.log_job_stage();
 create trigger jobs_after_stage_update after update of status on public.jobs
-for each row execute function public.log_job_stage();
+for each row execute function app_private.log_job_stage();
 
 create table public.machine_rates (
   id uuid primary key default gen_random_uuid(),
@@ -205,51 +211,70 @@ alter table public.material_rates enable row level security;
 alter table public.pricing_rules enable row level security;
 alter table public.quote_calculations enable row level security;
 
+-- New Supabase projects require explicit Data API grants. RLS remains the
+-- second boundary, including for the private cost catalogue.
+grant select on public.profiles to authenticated;
+grant select, insert on public.jobs to authenticated;
+grant select, insert on public.job_events to authenticated;
+grant select, insert, update, delete on public.machine_rates to authenticated;
+grant select, insert, update, delete on public.material_rates to authenticated;
+grant select, update on public.pricing_rules to authenticated;
+grant select on public.quote_calculations to authenticated;
+grant all on public.profiles, public.jobs, public.job_events,
+  public.machine_rates, public.material_rates, public.pricing_rules,
+  public.quote_calculations to service_role;
+grant usage, select on all sequences in schema public to authenticated, service_role;
+
+revoke all on schema app_private from public;
+grant usage on schema app_private to authenticated;
+revoke all on all functions in schema app_private from public;
+grant execute on function app_private.is_staff(), app_private.is_admin() to authenticated;
+
 create policy profiles_read on public.profiles for select to authenticated
-using (id = (select auth.uid()) or (select public.is_staff()));
+using (id = (select auth.uid()) or (select app_private.is_staff()));
 create policy jobs_read on public.jobs for select to authenticated
-using (customer_id = (select auth.uid()) or (select public.is_staff()));
+using (customer_id = (select auth.uid()) or (select app_private.is_staff()));
 create policy jobs_customer_create on public.jobs for insert to authenticated
 with check (customer_id = (select auth.uid()) and exists (
   select 1 from public.profiles where id = (select auth.uid()) and active
 ));
 create policy jobs_staff_update on public.jobs for update to authenticated
-using ((select public.is_staff())) with check ((select public.is_staff()));
+using ((select app_private.is_staff())) with check ((select app_private.is_staff()));
 revoke update on public.jobs from authenticated;
 grant update (status, progress, due_date, staff_note) on public.jobs to authenticated;
 create policy events_read on public.job_events for select to authenticated
-using ((select public.is_staff()) or (
+using ((select app_private.is_staff()) or (
   public_visible and exists (
     select 1 from public.jobs where jobs.id = job_id and jobs.customer_id = (select auth.uid())
   )
 ));
 create policy events_staff_create on public.job_events for insert to authenticated
-with check ((select public.is_staff()) and actor_id = (select auth.uid()));
+with check ((select app_private.is_staff()) and actor_id = (select auth.uid()));
 create policy machines_admin_read on public.machine_rates for select to authenticated
-using ((select public.is_admin()));
+using ((select app_private.is_admin()));
 create policy materials_admin_read on public.material_rates for select to authenticated
-using ((select public.is_admin()));
+using ((select app_private.is_admin()));
 create policy rules_admin_read on public.pricing_rules for select to authenticated
-using ((select public.is_admin()));
+using ((select app_private.is_admin()));
 create policy calculations_admin_read on public.quote_calculations for select to authenticated
-using ((select public.is_admin()));
+using ((select app_private.is_admin()));
 
 -- Admin controls operating data through the dashboard. Cost rows never reach
 -- customer queries because RLS grants only staff access.
 create policy machines_admin_insert on public.machine_rates for insert to authenticated
-with check ((select public.is_admin()));
+with check ((select app_private.is_admin()));
 create policy machines_admin_update on public.machine_rates for update to authenticated
-using ((select public.is_admin())) with check ((select public.is_admin()));
+using ((select app_private.is_admin())) with check ((select app_private.is_admin()));
 create policy machines_admin_delete on public.machine_rates for delete to authenticated
-using ((select public.is_admin()));
+using ((select app_private.is_admin()));
 create policy materials_admin_insert on public.material_rates for insert to authenticated
-with check ((select public.is_admin()));
+with check ((select app_private.is_admin()));
 create policy materials_admin_update on public.material_rates for update to authenticated
-using ((select public.is_admin())) with check ((select public.is_admin()));
+using ((select app_private.is_admin())) with check ((select app_private.is_admin()));
 create policy materials_admin_delete on public.material_rates for delete to authenticated
-using ((select public.is_admin()));
+using ((select app_private.is_admin()));
 create policy rules_admin_update on public.pricing_rules for update to authenticated
-using ((select public.is_admin())) with check ((select public.is_admin()));
+using ((select app_private.is_admin())) with check ((select app_private.is_admin()));
 
 -- Customer approval is the only customer-authorized change to an existing job.
 create function public.approve_quote(target_job_id uuid) returns void
@@ -287,5 +312,5 @@ with check (bucket_id = 'models' and (storage.foldername(name))[1] = (select aut
 create policy models_read on storage.objects for select to authenticated
 using (bucket_id = 'models' and (
   (storage.foldername(name))[1] = (select auth.uid()::text)
-  or (select public.is_staff())
+  or (select app_private.is_staff())
 ));
