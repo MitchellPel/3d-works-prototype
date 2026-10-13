@@ -57,16 +57,16 @@ function Logo() {
   );
 }
 
-function Model() {
+function Model({ small = false }: { small?: boolean }) {
   return (
-    <div className="model">
+    <div className={`model${small ? " small" : ""}`}>
       <div className="model-grid" />
       <div className="model-shape">
         <span className="shape-top" />
         <span className="shape-front"><i /><i /></span>
         <span className="shape-side" />
       </div>
-      <span className="model-axis">X <b>Y</b> Z</span>
+      {!small && <span className="model-axis">X <b>Y</b> Z</span>}
     </div>
   );
 }
@@ -81,6 +81,7 @@ export default function Home() {
   const [selectedId, setSelectedId] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [buffer, setBuffer] = useState<ArrayBuffer | null>(null);
+  const [previewError, setPreviewError] = useState(false);
   const [material, setMaterial] = useState("");
   const [colour, setColour] = useState("");
   const [quality, setQuality] = useState("Standard · 0.20 mm");
@@ -248,10 +249,15 @@ export default function Home() {
       return;
     }
     setFile(next);
+    setBuffer(null);
+    setPreviewError(false);
     void next
       .arrayBuffer()
       .then(setBuffer)
-      .catch(() => setMessage("Could not open that file."));
+      .catch(() => {
+        setPreviewError(true);
+        setMessage("Could not preview the file. You can still submit it for pricing.");
+      });
   }
 
   async function submit(event: FormEvent) {
@@ -665,7 +671,7 @@ export default function Home() {
                 <p>Small details, big ideas, and practical fixes. There&apos;s room for all of them.</p>
               </div>
               <div className="example-grid">
-                <div className="example"><span>01 / PROTOTYPING</span><div className="example-art"><Model /></div><h3>Form meets function.</h3><p>Test the shape before you scale.</p></div>
+                <div className="example"><span>01 / PROTOTYPING</span><div className="example-art"><Model small /></div><h3>Form meets function.</h3><p>Test the shape before you scale.</p></div>
                 <div className="example"><span>02 / FUNCTIONAL PARTS</span><div className="example-art rings"><i /><i /><i /></div><h3>Built to solve.</h3><p>Parts that make everyday work easier.</p></div>
                 <div className="example"><span>03 / CUSTOM OBJECTS</span><div className="example-art vase"><i /></div><h3>Made for your space.</h3><p>One-off pieces with a point of view.</p></div>
               </div>
@@ -879,6 +885,7 @@ export default function Home() {
                         buffer={buffer}
                         name={file.name}
                         colour={colour}
+                        onError={() => setPreviewError(true)}
                       />
                     ) : (
                       <div className="preview-placeholder">
@@ -886,6 +893,7 @@ export default function Home() {
                         <span>Model preview</span>
                       </div>
                     )}
+                    {previewError && <p className="preview-error" role="status">Preview unavailable for this model. The file is ready to upload.</p>}
                   </section>
                   <section className="panel estimate">
                     <span className="overline">AUTOMATIC ESTIMATE</span>

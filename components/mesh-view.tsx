@@ -85,6 +85,8 @@ export function MeshCanvas({
       let root: THREE.Object3D;
       const size = new THREE.Vector3();
       try {
+        if (!/\.stl$/i.test(name) && bytes.byteLength > 12 * 1024 * 1024)
+          throw new Error("preview too large");
         if (/\.3mf$/i.test(name)) {
           const xml = await modelXml(bytes);
           if (!xml) throw new Error("empty");
@@ -104,17 +106,18 @@ export function MeshCanvas({
         } else {
           let geo: THREE.BufferGeometry | null = null;
           try {
-            const parsed = new STLLoader().parse(bytes);
-            if (parsed.getAttribute("position")?.count) geo = parsed;
+            const positions = parseBinaryStl(bytes);
+            if (positions) {
+              geo = new THREE.BufferGeometry();
+              geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+            } else if (bytes.byteLength <= 8 * 1024 * 1024) {
+              const parsed = new STLLoader().parse(bytes);
+              if (parsed.getAttribute("position")?.count) geo = parsed;
+            }
           } catch {
             geo = null;
           }
-          if (!geo) {
-            const positions = parseBinaryStl(bytes);
-            if (!positions) throw new Error("empty");
-            geo = new THREE.BufferGeometry();
-            geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-          }
+          if (!geo) throw new Error("preview unavailable");
           geo.computeVertexNormals();
           geo.computeBoundingBox();
           geo.boundingBox?.getSize(size);
@@ -127,7 +130,13 @@ export function MeshCanvas({
       }
       if (dead) return;
 
-      const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      let renderer: THREE.WebGLRenderer;
+      try {
+        renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      } catch {
+        onErrorRef.current?.();
+        return;
+      }
       renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
       const scene = new THREE.Scene();
       const camera = new THREE.PerspectiveCamera(40, 1, 0.01, 100);

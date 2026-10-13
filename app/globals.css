@@ -27,7 +27,8 @@
 .auth-message{margin:16px 0 0;color:var(--green)!important}
 .auth-switch{display:flex;justify-content:space-between;gap:16px;margin-top:18px}
 .auth-switch button{border:0;background:none;color:var(--green);font-size:12px;font-weight:800;padding:0}
-.preview-panel{height:330px;overflow:hidden;padding:0!important}
+.preview-panel{height:330px;overflow:hidden;padding:0!important;position:relative}
+.preview-error{position:absolute;inset:auto 12px 12px;background:#162219ee;color:#f1f7ed;padding:10px 12px;font-size:12px;z-index:2}
 .preview-panel canvas{width:100%!important;height:100%!important}
 .preview-placeholder{height:100%;display:grid;align-content:center;justify-items:center;gap:14px;color:var(--muted)}
 .estimate strong{font-size:25px;line-height:1.3}

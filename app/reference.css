@@ -11,7 +11,7 @@ body,.app{background:#050b08;color:#f3f7f1}
 .public-header .logo-symbol i{border-color:#58fa4e}
 .public-header nav button.active{color:#63ff55}
 .header-end .btn{min-height:37px}
-.hero{padding:0;background-image:linear-gradient(90deg,#010703f5 0%,#010703d9 23%,#0107035c 51%,#01070300 77%),url('/hero-bracket.png');background-size:cover;background-position:center center;min-height:660px;position:relative;border-bottom:1px solid #27442c}
+.hero{padding:0;background-image:linear-gradient(90deg,#010703f5 0%,#010703d9 23%,#0107035c 51%,#01070300 77%),url('/3d-works-prototype/hero-bracket.png');background-size:cover;background-position:center center;min-height:660px;position:relative;border-bottom:1px solid #27442c}
 .hero:after{content:"";position:absolute;inset:0;background:linear-gradient(0deg,#020804c9 0%,transparent 32%);pointer-events:none}
 .hero-grid{position:relative;z-index:1;display:flex;align-items:center;min-height:530px;gap:0}
 .hero-copy{max-width:610px;padding-top:35px}
@@ -119,7 +119,7 @@ footer{background:#030805}
 .estimate>small{color:#91a693}
 .mini-model,.card-file .model{background:#1b2b20}
 .model.small .model-grid,.model.small .model-shape{display:none}
-.model.small{background-image:url('/green-bracket.png');background-size:contain;background-repeat:no-repeat;background-position:center}
+.model.small{background-image:url('/3d-works-prototype/green-bracket.png');background-size:contain;background-repeat:no-repeat;background-position:center}
 
 /* Customer tracking */
 .tracking-page{background:#061009}
