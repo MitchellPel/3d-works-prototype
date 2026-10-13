@@ -328,7 +328,7 @@ export function AdminPanel() {
             can refine.
           </p>
           {[...machines, { ...emptyMachine }].map((machine, index) => (
-            <div className="admin-rate" key={machine.id ?? "new"}>
+            <div className="admin-rate" key={machine.id ?? `draft-${index}`}>
               <input
                 aria-label="Machine name"
                 placeholder="Machine name"
@@ -436,7 +436,7 @@ export function AdminPanel() {
             stay private.
           </p>
           {[...materials, { ...emptyMaterial }].map((material, index) => (
-            <div className="admin-rate" key={material.id ?? "new"}>
+            <div className="admin-rate" key={material.id ?? `draft-${index}`}>
               <input
                 aria-label="Material type"
                 placeholder="Type (PLA)"
