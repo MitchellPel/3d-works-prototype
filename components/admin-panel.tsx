@@ -76,12 +76,7 @@ const ruleFields: {
     suffix: "R",
   },
   { key: "vat_percent", label: "VAT", scale: 1, suffix: "%" },
-  {
-    key: "delivery_fee_cents",
-    label: "Default delivery fee",
-    scale: 100,
-    suffix: "R",
-  },
+  { key: "default_lead_days", label: "Default deadline", scale: 1, suffix: "days" },
 ];
 const emptyMachine: Machine = {
   name: "",
@@ -273,14 +268,13 @@ export function AdminPanel() {
           <div className="panel-title">
             <h2>Estimate rules</h2>
             <span>
-              {rules?.sample_values
-                ? "Sample values — review before launch"
-                : "Client settings"}
+              {rules?.sample_values ? "Review pricing" : "Live pricing"}
             </span>
           </div>
           <p>
-            These settings affect future quotes. Existing quotes keep their
-            original price.
+            These settings set the price customers can confirm immediately.
+            Existing confirmed orders keep their original price. Collection is
+            the current fulfilment option; staff can edit each job deadline.
           </p>
           <div className="admin-fields">
             {ruleFields.map(({ key, label, scale, suffix }) => (

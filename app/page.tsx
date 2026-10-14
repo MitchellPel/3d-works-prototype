@@ -349,7 +349,7 @@ export default function Home() {
     if (error) setMessage(error.message);
     else {
       await load();
-      setMessage("Order confirmed. The studio can now begin production.");
+      setMessage("Order placed at the displayed price. The studio can now arrange payment and production.");
     }
     setBusy(false);
   }
@@ -739,7 +739,7 @@ export default function Home() {
               <h1>Let&apos;s make it real.</h1>
               <p>
                 Upload a model and choose how you want it printed. We calculate
-                an estimate automatically.
+                a price automatically from the model and current print rates.
               </p>
             </div>
             {!user ? (
@@ -896,12 +896,12 @@ export default function Home() {
                     {previewError && <p className="preview-error" role="status">Preview unavailable for this model. The file is ready to upload.</p>}
                   </section>
                   <section className="panel estimate">
-                    <span className="overline">AUTOMATIC ESTIMATE</span>
+                    <span className="overline">AUTOMATIC PRICE</span>
                     <strong>Calculated after upload</strong>
                     <p>
-                      Based on model geometry and current pricing settings. The
-                      amount is an estimate and is confirmed when you place the
-                      order. No payment is collected online.
+                      Based on model geometry and current pricing settings.
+                      Review the price before placing your order for collection.
+                      Online payment is being set up.
                     </p>
                     <button
                       className="btn"
@@ -999,16 +999,16 @@ export default function Home() {
                       </p>
                     </div>
                     <div className="checkout-card">
-                      <span className="overline">ORDER ESTIMATE</span>
+                      <span className="overline">ORDER PRICE</span>
                       <strong>
                         {selected.price === null
                           ? "Calculating…"
                           : money(selected.price)}
                       </strong>
                       <p>
-                        Calculated from the uploaded geometry. Confirm this
-                        amount at checkout to place your order. No payment is
-                        collected online.
+                        Calculated from your model and the studio&apos;s current
+                        rates. Place this order for collection at the price
+                        shown. Online payment is being set up.
                       </p>
                       {selected.pricingProvisional &&
                         selected.price !== null && (
@@ -1033,7 +1033,7 @@ export default function Home() {
                             disabled={busy}
                             onClick={() => confirm(selected)}
                           >
-                            <Check size={16} /> Confirm order
+                            <Check size={16} /> Place order
                           </button>
                         )}
                     </div>
