@@ -4,7 +4,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
 import { STLLoader } from "three/addons/loaders/STLLoader.js";
-import { modelXml } from "@/lib/read-3mf.mjs";
+import { ThreeMFLoader } from "three/addons/loaders/3MFLoader.js";
 import { parseBinaryStl } from "@/lib/read-stl.mjs";
 
 const tint: Record<string, number> = {
@@ -22,24 +22,6 @@ function paintColour(name: string) {
   color.getHSL(hsl);
   if (hsl.l < 0.28) color.setHSL(hsl.h, hsl.s, 0.42);
   return color;
-}
-
-function positionsFrom3mf(xml: string) {
-  const doc = new DOMParser().parseFromString(xml, "application/xml");
-  const verts = [...doc.getElementsByTagNameNS("*", "vertex")];
-  const tris = [...doc.getElementsByTagNameNS("*", "triangle")];
-  if (!verts.length || !tris.length) throw new Error("empty");
-  const pos = new Float32Array(tris.length * 9);
-  tris.forEach((tri, index) => {
-    [tri.getAttribute("v1"), tri.getAttribute("v2"), tri.getAttribute("v3")].forEach((id, corner) => {
-      const vert = verts[Number(id)];
-      const at = index * 9 + corner * 3;
-      pos[at] = Number(vert?.getAttribute("x"));
-      pos[at + 1] = Number(vert?.getAttribute("y"));
-      pos[at + 2] = Number(vert?.getAttribute("z"));
-    });
-  });
-  return pos;
 }
 
 export function MeshCanvas({
@@ -88,14 +70,16 @@ export function MeshCanvas({
         if (!/\.stl$/i.test(name) && bytes.byteLength > 12 * 1024 * 1024)
           throw new Error("preview too large");
         if (/\.3mf$/i.test(name)) {
-          const xml = await modelXml(bytes);
-          if (!xml) throw new Error("empty");
-          const geo = new THREE.BufferGeometry();
-          geo.setAttribute("position", new THREE.BufferAttribute(positionsFrom3mf(xml), 3));
-          geo.computeVertexNormals();
-          geo.computeBoundingBox();
-          geo.boundingBox?.getSize(size);
-          root = new THREE.Mesh(geo, material());
+          root = new ThreeMFLoader().parse(bytes);
+          let faces = 0;
+          root.traverse((child) => {
+            const mesh = child as THREE.Mesh;
+            if (!mesh.isMesh) return;
+            faces += mesh.geometry?.getAttribute("position")?.count ?? 0;
+            mesh.material = material();
+          });
+          if (!faces) throw new Error("empty");
+          new THREE.Box3().setFromObject(root).getSize(size);
         } else if (/\.obj$/i.test(name)) {
           root = new OBJLoader().parse(new TextDecoder().decode(bytes));
           root.traverse((child) => {
