@@ -66,8 +66,14 @@ Deno.serve(async (request) => {
     .select("*")
     .eq("id", jobId)
     .single();
-  if (jobError || !job || job.customer_id !== auth.user.id)
+  if (jobError || !job)
     return response(origin, { error: "Job not found" }, 404);
+  if (job.customer_id !== auth.user.id) {
+    const { data: operator } = await admin.from("profiles")
+      .select("role,active").eq("id", auth.user.id).single();
+    if (!operator?.active || !["staff", "admin"].includes(operator.role))
+      return response(origin, { error: "Job not found" }, 404);
+  }
   if (job.price_cents !== null && !job.pricing_provisional)
     return response(origin, {
       priceCents: job.price_cents,
@@ -134,6 +140,7 @@ Deno.serve(async (request) => {
       .update({
         status: "Quoted",
         price_cents: estimate.totalCents,
+        assigned_machine_id: estimate.machineId,
         quoted_at: new Date().toISOString(),
         pricing_error: null,
         pricing_provisional: Boolean(rules.data.sample_values),

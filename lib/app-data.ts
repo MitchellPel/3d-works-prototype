@@ -5,7 +5,8 @@ export type Stage =
   | "Printing"
   | "Post-Processing"
   | "Ready for Collection"
-  | "Completed";
+  | "Completed"
+  | "Cancelled";
 
 export type Profile = {
   id: string;
@@ -33,6 +34,8 @@ export type Job = {
   progress: number;
   note: string;
   customerNote: string;
+  assignedStaffId: string | null;
+  assignedMachineId: string | null;
   pricingError: string | null;
   pricingProvisional: boolean;
   activity: string[];
@@ -46,6 +49,7 @@ export const stages: Stage[] = [
   "Post-Processing",
   "Ready for Collection",
   "Completed",
+  "Cancelled",
 ];
 
 export function toJob(row: Record<string, unknown>, activity: string[]): Job {
@@ -68,6 +72,8 @@ export function toJob(row: Record<string, unknown>, activity: string[]): Job {
     progress: Number(row.progress),
     note: String(row.staff_note ?? ""),
     customerNote: String(row.customer_note ?? ""),
+    assignedStaffId: row.assigned_staff_id ? String(row.assigned_staff_id) : null,
+    assignedMachineId: row.assigned_machine_id ? String(row.assigned_machine_id) : null,
     pricingError: row.pricing_error ? String(row.pricing_error) : null,
     pricingProvisional: Boolean(row.pricing_provisional),
     activity,

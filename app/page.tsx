@@ -36,6 +36,7 @@ import {
 type Route =
   "home" | "quote" | "tracking" | "board" | "detail" | "admin" | "account";
 type Option = { material_type: string; colour: string };
+type MachineOption = { id: string; name: string };
 const money = (value: number) =>
   "R " +
   value.toLocaleString("en-ZA", {
@@ -78,6 +79,8 @@ export default function Home() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [options, setOptions] = useState<Option[]>([]);
+  const [staffOptions, setStaffOptions] = useState<Profile[]>([]);
+  const [machineOptions, setMachineOptions] = useState<MachineOption[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [buffer, setBuffer] = useState<ArrayBuffer | null>(null);
@@ -89,6 +92,13 @@ export default function Home() {
   const [qty, setQty] = useState(1);
   const [note, setNote] = useState("");
   const [staffNote, setStaffNote] = useState("");
+  const [assignedStaffId, setAssignedStaffId] = useState("");
+  const [assignedMachineId, setAssignedMachineId] = useState("");
+  const [editMaterial, setEditMaterial] = useState("");
+  const [editColour, setEditColour] = useState("");
+  const [editQuality, setEditQuality] = useState("");
+  const [editInfill, setEditInfill] = useState(20);
+  const [editQty, setEditQty] = useState(1);
   const [progress, setProgress] = useState(0);
   const [due, setDue] = useState("");
   const [busy, setBusy] = useState(false);
@@ -134,6 +144,21 @@ export default function Home() {
     ]);
     if (profileResult.error) setMessage(profileResult.error.message);
     else setProfile(profileResult.data as Profile);
+    if (profileResult.data?.active && ["staff", "admin"].includes(profileResult.data.role)) {
+      const [people, machines] = await Promise.all([
+        supabase.from("profiles").select("id,display_name,role,active").in("role", ["staff", "admin"]).eq("active", true),
+        supabase.rpc("list_active_machine_names"),
+      ]);
+      if (people.error || machines.error)
+        setMessage(people.error?.message ?? machines.error?.message ?? "Could not load assignments");
+      else {
+        setStaffOptions((people.data ?? []) as Profile[]);
+        setMachineOptions((machines.data ?? []) as MachineOption[]);
+      }
+    } else {
+      setStaffOptions([]);
+      setMachineOptions([]);
+    }
     if (jobsResult.error) {
       setMessage(jobsResult.error.message);
       return;
@@ -223,13 +248,23 @@ export default function Home() {
   useEffect(() => {
     const timer = setTimeout(() => {
       setStaffNote(selected?.note ?? "");
+      setAssignedStaffId(selected?.assignedStaffId ?? "");
+      setAssignedMachineId(selected?.assignedMachineId ?? "");
+      setEditMaterial(selected?.material ?? "");
+      setEditColour(selected?.colour ?? "");
+      setEditQuality(selected?.quality ?? "Standard · 0.20 mm");
+      setEditInfill(selected?.infill ?? 20);
+      setEditQty(selected?.qty ?? 1);
       setProgress(selected?.progress ?? 0);
       setDue(
         selected?.due && selected.due !== "To be confirmed" ? selected.due : "",
       );
     }, 0);
     return () => clearTimeout(timer);
-  }, [selected?.id, selected?.note, selected?.progress, selected?.due]);
+  }, [selected?.id, selected?.note, selected?.progress, selected?.due,
+    selected?.assignedStaffId, selected?.assignedMachineId,
+    selected?.material, selected?.colour, selected?.quality,
+    selected?.infill, selected?.qty]);
 
   function go(next: Route) {
     location.hash = next;
@@ -388,12 +423,39 @@ export default function Home() {
         progress: Number(progress),
         due_date: due || null,
         staff_note: staffNote.trim(),
+        assigned_staff_id: assignedStaffId || null,
+        assigned_machine_id: assignedMachineId || null,
       })
       .eq("id", job.id);
     if (error) setMessage(error.message);
     else {
       await load();
       setMessage("Job updated.");
+    }
+    setBusy(false);
+  }
+  async function saveOrderDetails(job: Job) {
+    if (!supabase || !isStaff || !["Submitted", "Quoted"].includes(job.status)) return;
+    setBusy(true);
+    setMessage("");
+    const { error } = await supabase.rpc("staff_update_unconfirmed_order", {
+      target_job_id: job.id,
+      next_material: editMaterial,
+      next_colour: editColour,
+      next_quality: editQuality,
+      next_infill: editInfill,
+      next_qty: editQty,
+    });
+    if (error) {
+      setMessage(error.message);
+    } else {
+      const quote = await supabase.functions.invoke("estimate-quote", {
+        body: { jobId: job.id },
+      });
+      await load();
+      setMessage(quote.error || quote.data?.error
+        ? `Order updated. Repricing failed: ${quote.data?.error ?? quote.error?.message}`
+        : "Order updated and repriced. The customer can review the new price.");
     }
     setBusy(false);
   }
@@ -1059,7 +1121,8 @@ export default function Home() {
                           key={stage}
                           className={
                             "timeline-row " +
-                            (index <= stages.indexOf(selected.status)
+                            ((selected.status === "Cancelled" && stage === "Cancelled") ||
+                            (selected.status !== "Cancelled" && index <= stages.indexOf(selected.status))
                               ? "done"
                               : "")
                           }
@@ -1201,6 +1264,8 @@ export default function Home() {
                           ["Quality", selected.quality],
                           ["Infill", selected.infill + "%"],
                           ["Quantity", selected.qty],
+                          ["Assigned machine", machineOptions.find((item) => item.id === selected.assignedMachineId)?.name ?? "Not assigned"],
+                          ["Assigned staff", staffOptions.find((item) => item.id === selected.assignedStaffId)?.display_name ?? "Not assigned"],
                           [
                             "Estimate",
                             selected.price === null
@@ -1214,6 +1279,45 @@ export default function Home() {
                           </div>
                         ))}
                       </div>
+                      {["Submitted", "Quoted"].includes(selected.status) && (
+                        <div className="order-edit">
+                          <h3>Edit order before customer confirmation</h3>
+                          <p>Changing print settings recalculates the price for the customer to review. Confirmed order prices stay fixed.</p>
+                          <div className="order-edit-fields">
+                            <label>Material
+                              <select value={editMaterial} onChange={(e) => {
+                                setEditMaterial(e.target.value);
+                                setEditColour(options.find((option) => option.material_type === e.target.value)?.colour ?? "");
+                              }}>
+                                {[...new Set(options.map((option) => option.material_type))].map((item) =>
+                                  <option key={item} value={item}>{item}</option>)}
+                              </select>
+                            </label>
+                            <label>Colour
+                              <select value={editColour} onChange={(e) => setEditColour(e.target.value)}>
+                                {options.filter((option) => option.material_type === editMaterial).map((option) =>
+                                  <option key={option.colour} value={option.colour}>{option.colour}</option>)}
+                              </select>
+                            </label>
+                            <label>Quality
+                              <select value={editQuality} onChange={(e) => setEditQuality(e.target.value)}>
+                                {["Draft · 0.28 mm", "Standard · 0.20 mm", "Fine · 0.12 mm"].map((item) =>
+                                  <option key={item}>{item}</option>)}
+                              </select>
+                            </label>
+                            <label>Infill %
+                              <input type="number" min="10" max="80" value={editInfill}
+                                onChange={(e) => setEditInfill(Number(e.target.value))} />
+                            </label>
+                            <label>Quantity
+                              <input type="number" min="1" max="100" value={editQty}
+                                onChange={(e) => setEditQty(Number(e.target.value))} />
+                            </label>
+                          </div>
+                          <button className="btn outline" disabled={busy || !editMaterial || !editColour}
+                            onClick={() => saveOrderDetails(selected)}>Save and recalculate</button>
+                        </div>
+                      )}
                       <p className="note-text">
                         {selected.customerNote || "No customer notes."}
                       </p>
@@ -1245,6 +1349,7 @@ export default function Home() {
                           value={selected.status}
                           onChange={(e) => {
                             const stage = e.target.value as Stage;
+                            if (stage === "Cancelled" && !window.confirm("Cancel this order? The customer will see the cancellation.")) return;
                             if (stage !== "Quoted")
                               void saveJob(selected, stage);
                           }}
@@ -1259,6 +1364,25 @@ export default function Home() {
                               <option key={stage}>{stage}</option>
                             ))}
                         </select>
+                      </label>
+                      <label>
+                        Assigned staff
+                        <select value={assignedStaffId} onChange={(e) => setAssignedStaffId(e.target.value)}>
+                          <option value="">Unassigned</option>
+                          {staffOptions.map((person) => (
+                            <option key={person.id} value={person.id}>{person.display_name || person.id}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        Production machine
+                        <select value={assignedMachineId} onChange={(e) => setAssignedMachineId(e.target.value)}>
+                          <option value="">Unassigned</option>
+                          {machineOptions.map((machine) => (
+                            <option key={machine.id} value={machine.id}>{machine.name}</option>
+                          ))}
+                        </select>
+                        <small>The customer&apos;s confirmed price stays fixed if this changes.</small>
                       </label>
                       <label>
                         Progress · {progress}%
