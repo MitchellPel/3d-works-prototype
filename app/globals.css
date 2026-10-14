@@ -39,6 +39,20 @@
 .checkout-card strong{display:block;font-family:Manrope,sans-serif;font-size:34px;margin:9px 0}
 .checkout-card p{max-width:540px;font-size:13px;line-height:1.6}
 .checkout-card .overline{color:#386038}
+.price-breakdown{font-size:12px;line-height:1.5;margin:18px 0}
+.price-breakdown p{font-size:12px;line-height:1.6}
+.price-breakdown dl{margin:14px 0}
+.price-breakdown dl>div{display:flex;justify-content:space-between;gap:18px;padding:8px 0;border-bottom:1px solid currentColor}
+.price-breakdown dt{min-width:0;overflow-wrap:anywhere}
+.price-breakdown dd{margin:0;white-space:nowrap;font-weight:700}
+.price-breakdown .price-total{font-weight:800;border-bottom:0}
+.order-actions{display:flex;flex-wrap:wrap;gap:12px;margin-top:20px}
+.btn.danger{background:#7d302b;color:#fff;border-color:#a8544c}
+.archive-toggle{padding:10px 16px;margin-bottom:20px;border:1px solid var(--line);background:transparent;color:inherit;border-radius:4px}
+.cancelled-status{padding:16px;border:1px solid #a8544c;border-radius:4px;color:#e8b5ae}
+.timeline{display:block!important}
+.timeline-row{display:flex!important;min-height:42px!important;width:auto!important}
+.timeline-row:before{left:8px!important;top:25px!important;bottom:-12px!important;width:1px!important;height:auto!important}
 .order-detail .text-action{color:#40764b;text-decoration:underline;font-weight:800;margin:20px 0}
 .staff-shell{background:#101412;min-height:calc(100vh - 80px);padding:60px 0}
 .staff-shell .staff-title{display:flex;justify-content:space-between;gap:20px;margin-bottom:30px}

@@ -24,10 +24,13 @@ import type { User } from "@supabase/supabase-js";
 import { AuthPanel } from "@/components/auth-panel";
 import { AdminPanel } from "@/components/admin-panel";
 import { MeshCanvas } from "@/components/mesh-view";
+import { PriceBreakdown } from "@/components/price-breakdown";
+import { FunctionsHttpError } from "@supabase/supabase-js";
 import { getSupabase } from "@/lib/supabase";
 import {
   toJob,
   stages,
+  productionStages,
   type Job,
   type Profile,
   type Stage,
@@ -44,6 +47,16 @@ const money = (value: number) =>
     maximumFractionDigits: 2,
   });
 const modelFile = (name: string) => /\.(stl|obj|3mf)$/i.test(name);
+
+async function functionError(error: unknown, fallback = "Calculation failed. Please try again.") {
+  if (error instanceof FunctionsHttpError) {
+    try {
+      const body = await error.context.json();
+      return String(body.error ?? body.message ?? fallback);
+    } catch { return fallback; }
+  }
+  return error instanceof Error ? error.message : fallback;
+}
 
 function Logo() {
   return (
@@ -78,6 +91,7 @@ export default function Home() {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [showArchived, setShowArchived] = useState(false);
   const [options, setOptions] = useState<Option[]>([]);
   const [staffOptions, setStaffOptions] = useState<Profile[]>([]);
   const [machineOptions, setMachineOptions] = useState<MachineOption[]>([]);
@@ -123,7 +137,10 @@ export default function Home() {
     [options, chosenMaterial],
   );
   const chosenColour = colours.includes(colour) ? colour : (colours[0] ?? "");
-  const selected = jobs.find((job) => job.id === selectedId) ?? jobs[0];
+  const visibleJobs = jobs.filter((job) => job.archived === showArchived);
+  const customerJobs = visibleJobs.filter((job) => job.customerId === user?.id);
+  const selectableJobs = route === "tracking" ? customerJobs : visibleJobs;
+  const selected = selectableJobs.find((job) => job.id === selectedId) ?? selectableJobs[0];
 
   const load = useCallback(async () => {
     if (!supabase) return;
@@ -308,6 +325,7 @@ export default function Home() {
     setBusy(true);
     setMessage("");
     let path = "";
+    let saved = false;
     try {
       path = `${user.id}/${crypto.randomUUID()}/${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
       const upload = await supabase.storage.from("models").upload(path, file, {
@@ -334,6 +352,8 @@ export default function Home() {
         .single();
       if (created.error || !created.data)
         throw created.error ?? new Error("Could not create order");
+      saved = true;
+      setShowArchived(false);
       setSelectedId(created.data.id);
       const quote = await supabase.functions.invoke("estimate-quote", {
         body: { jobId: created.data.id },
@@ -346,7 +366,7 @@ export default function Home() {
       if (quote.error || quote.data?.error)
         setMessage(
           "Request saved. Automatic pricing is pending: " +
-            (quote.data?.error ?? quote.error?.message),
+            (quote.data?.error ?? await functionError(quote.error)),
         );
       else if (quote.data?.provisional)
         setMessage(
@@ -362,7 +382,7 @@ export default function Home() {
           ? error.message
           : "Could not submit the request.",
       );
-      if (path) await supabase.storage.from("models").remove([path]);
+      if (path && !saved) await supabase.storage.from("models").remove([path]);
     } finally {
       setBusy(false);
     }
@@ -403,7 +423,7 @@ export default function Home() {
     await load();
     setMessage(
       error
-        ? error.message
+        ? await functionError(error)
         : data?.error
           ? String(data.error)
           : data?.provisional
@@ -411,6 +431,30 @@ export default function Home() {
             : "Estimate refreshed. Review the amount before confirming.",
     );
     setBusy(false);
+  }
+  async function cancelOrder(job: Job) {
+    if (!supabase || !window.confirm(`Cancel ${job.code}? You can archive it afterwards to remove it from the active list.`)) return;
+    setBusy(true);
+    try {
+      const { error } = await supabase.rpc("cancel_order", { target_job_id: job.id });
+      if (error) throw error;
+      await load();
+      setMessage("Order cancelled. You can now archive it.");
+    } catch (error) { setMessage(error instanceof Error ? error.message : String((error as {message?: string})?.message ?? "Could not cancel order")); }
+    finally { setBusy(false); }
+  }
+  async function archiveOrder(job: Job) {
+    if (!supabase) return;
+    setBusy(true);
+    try {
+      const { error } = await supabase.rpc("set_order_archived", { target_job_id: job.id, archive: !job.archived });
+      if (error) throw error;
+      await load();
+      setSelectedId("");
+      if (route === "detail") go("board");
+      setMessage(job.archived ? "Order restored to the active list." : "Order archived. Open Archived orders to restore it.");
+    } catch (error) { setMessage(error instanceof Error ? error.message : String((error as {message?: string})?.message ?? "Could not archive order")); }
+    finally { setBusy(false); }
   }
   async function saveJob(job: Job, nextStage: Stage) {
     if (!supabase || !isStaff) return;
@@ -426,7 +470,7 @@ export default function Home() {
         assigned_staff_id: assignedStaffId || null,
         assigned_machine_id: assignedMachineId || null,
       })
-      .eq("id", job.id);
+      .eq("id", job.id).select("id").single();
     if (error) setMessage(error.message);
     else {
       await load();
@@ -454,7 +498,7 @@ export default function Home() {
       });
       await load();
       setMessage(quote.error || quote.data?.error
-        ? `Order updated. Repricing failed: ${quote.data?.error ?? quote.error?.message}`
+        ? `Order updated. Repricing failed: ${quote.data?.error ?? await functionError(quote.error)}`
         : "Order updated and repriced. The customer can review the new price.");
     }
     setBusy(false);
@@ -995,13 +1039,16 @@ export default function Home() {
                 New project <Plus size={16} />
               </button>
             </div>
+            {user && <button className="archive-toggle" onClick={() => { setShowArchived(!showArchived); setSelectedId(""); }}>
+              {showArchived ? "Show active orders" : "Archived orders"}
+            </button>}
             {!user ? (
               <AuthPanel onComplete={() => void load()} />
-            ) : jobs.length === 0 ? (
+            ) : customerJobs.length === 0 ? (
               <div className="empty-state panel">
                 <FileBox size={38} />
-                <h2>No orders yet</h2>
-                <p>Upload your first model to get an automatic estimate.</p>
+                <h2>{showArchived ? "No archived orders" : "No active orders"}</h2>
+                <p>{showArchived ? "Cancelled or completed orders can be archived and restored here." : "Upload a model to get an automatic estimate."}</p>
                 <button className="btn" onClick={() => go("quote")}>
                   Start a project
                 </button>
@@ -1011,10 +1058,9 @@ export default function Home() {
                 <aside className="orders">
                   <div className="orders-title">
                     <h2>Orders</h2>
-                    <span>{jobs.length}</span>
+                    <span>{customerJobs.length}</span>
                   </div>
-                  {jobs
-                    .filter((job) => job.customerId === user.id)
+                  {customerJobs
                     .map((job) => (
                       <button
                         key={job.id}
@@ -1051,8 +1097,9 @@ export default function Home() {
                       <span>CURRENT STAGE</span>
                       <h3>{selected.status}</h3>
                       <p>
-                        {selected.pricingError
-                          ? "We could not calculate this estimate yet. The studio will investigate the model or pricing configuration."
+                        {selected.status === "Cancelled" ? "This order has been cancelled. Archive it to remove it from the active list."
+                          : selected.pricingError
+                          ? selected.pricingError
                           : selected.status === "Submitted"
                             ? "Your file is being measured for an automatic estimate."
                             : selected.status === "Quoted"
@@ -1064,7 +1111,7 @@ export default function Home() {
                       <span className="overline">ORDER PRICE</span>
                       <strong>
                         {selected.price === null
-                          ? "Calculating…"
+                          ? selected.status === "Cancelled" ? "No price calculated" : selected.pricingError ? "Calculation failed" : "Calculating…"
                           : money(selected.price)}
                       </strong>
                       <p>
@@ -1072,14 +1119,14 @@ export default function Home() {
                         rates. Place this order for collection at the price
                         shown. Online payment is being set up.
                       </p>
+                      <PriceBreakdown summary={selected.pricingSummary} />
                       {selected.pricingProvisional &&
                         selected.price !== null && (
                           <p>
                             Sample pricing is awaiting administrator approval.
                           </p>
                         )}
-                      {(selected.pricingProvisional ||
-                        selected.pricingError) && (
+                      {["Submitted", "Quoted"].includes(selected.status) && !selected.archived && (
                         <button
                           className="btn outline"
                           disabled={busy}
@@ -1116,19 +1163,18 @@ export default function Home() {
                     </div>
                     <div className="timeline">
                       <h3>Project journey</h3>
-                      {stages.map((stage, index) => (
+                      {selected.status === "Cancelled" ? <p className="cancelled-status">Order cancelled</p> : productionStages.map((stage, index) => (
                         <div
                           key={stage}
                           className={
                             "timeline-row " +
-                            ((selected.status === "Cancelled" && stage === "Cancelled") ||
-                            (selected.status !== "Cancelled" && index <= stages.indexOf(selected.status))
+                            (index <= productionStages.indexOf(selected.status)
                               ? "done"
                               : "")
                           }
                         >
                           <span>
-                            {index < stages.indexOf(selected.status) && (
+                            {index < productionStages.indexOf(selected.status) && (
                               <Check size={12} />
                             )}
                           </span>
@@ -1151,6 +1197,12 @@ export default function Home() {
                     >
                       Download your model
                     </button>
+                    <div className="order-actions">
+                      {!selected.archived && (isStaff || ["Submitted", "Quoted", "Approved"].includes(selected.status)) && !["Cancelled", "Completed"].includes(selected.status) &&
+                        <button className="btn danger" disabled={busy} onClick={() => cancelOrder(selected)}>Cancel order</button>}
+                      {["Cancelled", "Completed"].includes(selected.status) &&
+                        <button className="btn outline" disabled={busy} onClick={() => archiveOrder(selected)}>{selected.archived ? "Restore order" : "Archive order"}</button>}
+                    </div>
                   </article>
                 )}
               </div>
@@ -1187,6 +1239,7 @@ export default function Home() {
                   </div>
                   <div className="workspace-nav">
                     <button onClick={() => go("board")}>Job board</button>
+                    <button onClick={() => { setShowArchived(!showArchived); setSelectedId(""); go("board"); }}>{showArchived ? "Active jobs" : "Archived jobs"}</button>
                     {profile?.role === "admin" && (
                       <button onClick={() => go("admin")}>
                         Settings & staff
@@ -1203,10 +1256,10 @@ export default function Home() {
                         <div className="column-head">
                           <h2>{stage}</h2>
                           <span>
-                            {jobs.filter((job) => job.status === stage).length}
+                            {visibleJobs.filter((job) => job.status === stage).length}
                           </span>
                         </div>
-                        {jobs
+                        {visibleJobs
                           .filter((job) => job.status === stage)
                           .map((job) => (
                             <button
@@ -1236,7 +1289,7 @@ export default function Home() {
                               </div>
                             </button>
                           ))}
-                        {!jobs.some((job) => job.status === stage) && (
+                        {!visibleJobs.some((job) => job.status === stage) && (
                           <div className="empty-column">No jobs</div>
                         )}
                       </section>
@@ -1257,6 +1310,7 @@ export default function Home() {
                       <p>
                         {selected.customer} · {selected.email}
                       </p>
+                      <PriceBreakdown summary={selected.pricingSummary} />
                       <div className="specs">
                         {[
                           ["Material", selected.material],
@@ -1347,10 +1401,11 @@ export default function Home() {
                         Stage
                         <select
                           value={selected.status}
+                          disabled={busy || selected.status === "Cancelled" || selected.archived}
                           onChange={(e) => {
                             const stage = e.target.value as Stage;
-                            if (stage === "Cancelled" && !window.confirm("Cancel this order? The customer will see the cancellation.")) return;
-                            if (stage !== "Quoted")
+                            if (stage === "Cancelled") void cancelOrder(selected);
+                            else if (stage !== "Quoted")
                               void saveJob(selected, stage);
                           }}
                         >
@@ -1417,6 +1472,12 @@ export default function Home() {
                       >
                         Save update
                       </button>
+                      <div className="order-actions">
+                        {!selected.archived && !["Cancelled", "Completed"].includes(selected.status) &&
+                          <button className="btn danger" disabled={busy} onClick={() => cancelOrder(selected)}>Cancel job</button>}
+                        {["Cancelled", "Completed"].includes(selected.status) &&
+                          <button className="btn outline" disabled={busy} onClick={() => archiveOrder(selected)}>{selected.archived ? "Restore job" : "Archive job"}</button>}
+                      </div>
                     </section>
                   </div>
                 ) : (

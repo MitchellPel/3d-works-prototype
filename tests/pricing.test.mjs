@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { estimateQuote } from "../lib/quote-engine.ts";
 import { measureModel } from "../lib/model-metrics.ts";
+import { zipSync, strToU8 } from "fflate";
 
 const machine = {
   id: "machine-1",
@@ -162,4 +163,51 @@ test("uses bounding-box fallback for an open mesh", () => {
   const metrics = measureModel(new TextEncoder().encode(open), "open.stl");
   assert.deepEqual(metrics.boundsMm, [10, 10, 10]);
   assert.equal(metrics.enclosedVolumeMm3, null);
+});
+
+test("material rates change the sell price above the minimum and explain identical small quotes", () => {
+  const input = { machines: [machine], materials: [material], rules, infill: 20, qty: 1, quality: "Standard" };
+  const expensive = { ...material, id: "premium", package_cost_cents: 150000 };
+  const small = { boundsMm: [10, 10, 10], enclosedVolumeMm3: 1000 };
+  const cheapSmall = estimateQuote({ ...input, model: small });
+  const premiumSmall = estimateQuote({ ...input, model: small, materials: [expensive] });
+  assert.notEqual(cheapSmall.materialCents, premiumSmall.materialCents);
+  assert.equal(cheapSmall.totalCents, premiumSmall.totalCents);
+  assert.ok(cheapSmall.minimumAdjustmentCents > premiumSmall.minimumAdjustmentCents);
+  const large = { boundsMm: [30, 30, 30], enclosedVolumeMm3: 27000 };
+  const cheapLarge = estimateQuote({ ...input, model: large });
+  const premiumLarge = estimateQuote({ ...input, model: large, materials: [expensive] });
+  assert.ok(premiumLarge.totalCents > cheapLarge.totalCents);
+  assert.equal(cheapLarge.minimumAdjustmentCents, 0);
+  assert.equal(cheapLarge.totalCents, cheapLarge.machineCents + cheapLarge.materialCents + cheapLarge.setupCents + cheapLarge.vatCents);
+});
+
+const tetraMesh = `<mesh><vertices><vertex x="0" y="0" z="0"/><vertex x="1" y="0" z="0"/><vertex x="0" y="1" z="0"/><vertex x="0" y="0" z="1"/></vertices><triangles><triangle v1="0" v2="2" v3="1"/><triangle v1="0" v2="1" v3="3"/><triangle v1="0" v2="3" v3="2"/><triangle v1="1" v2="2" v3="3"/></triangles></mesh>`;
+const package3mf = (root, extra = {}) => zipSync({
+  "_rels/.rels": strToU8('<Relationships><Relationship Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel" Target="/3D/assembly.model"/></Relationships>'),
+  "3D/assembly.model": strToU8(root), ...extra,
+});
+
+test("3MF production components resolve separate model files, scoped IDs, units and transforms", () => {
+  const file = package3mf(`<model unit="millimeter"><resources><object id="1"><components><component objectid="1" p:path="/3D/Objects/a.model" transform="1 0 0 0 1 0 0 0 1 10 0 0"/><component objectid="1" p:path="/3D/Objects/b.model" transform="1 0 0 0 1 0 0 0 1 30 0 0"/></components></object></resources><build><item objectid="1" transform="1 0 0 0 1 0 0 0 1 100 0 0"/></build></model>`, {
+    "3D/Objects/a.model": strToU8(`<model unit="millimeter"><resources><object id="1">${tetraMesh}</object></resources></model>`),
+    "3D/Objects/b.model": strToU8(`<model unit="centimeter"><resources><object id="1">${tetraMesh}</object></resources><build><item objectid="999"/></build></model>`),
+  });
+  const result = measureModel(file, "production.3mf");
+  assert.deepEqual(result.boundsMm, [30, 10, 10]);
+  assert.ok(Math.abs(result.enclosedVolumeMm3 - 1001 / 6) < 1e-6);
+});
+
+test("3MF build items support external paths and ignore non-printable items", () => {
+  const file = package3mf('<model><resources/><build><item objectid="1" p:path="/3D/Objects/a.model"/><item objectid="999" printable="0"/></build></model>', {
+    "3D/Objects/a.model": strToU8(`<model><resources><object id="1">${tetraMesh}</object></resources></model>`),
+  });
+  assert.deepEqual(measureModel(file, "build.3mf").boundsMm, [1, 1, 1]);
+});
+
+test("3MF rejects missing files and recursive components instead of calculating a partial price", () => {
+  const missing = package3mf('<model><resources/><build><item objectid="1" p:path="/3D/missing.model"/></build></model>');
+  assert.throws(() => measureModel(missing, "missing.3mf"), /missing model file/);
+  const cycle = package3mf('<model><resources><object id="1"><components><component objectid="1"/></components></object></resources><build><item objectid="1"/></build></model>');
+  assert.throws(() => measureModel(cycle, "cycle.3mf"), /circular/);
 });

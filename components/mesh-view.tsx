@@ -4,7 +4,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
 import { STLLoader } from "three/addons/loaders/STLLoader.js";
-import { ThreeMFLoader } from "three/addons/loaders/3MFLoader.js";
+import { visit3mfTriangles } from "@/lib/model-metrics";
 import { parseBinaryStl } from "@/lib/read-stl.mjs";
 
 const tint: Record<string, number> = {
@@ -67,18 +67,16 @@ export function MeshCanvas({
       let root: THREE.Object3D;
       const size = new THREE.Vector3();
       try {
-        if (!/\.stl$/i.test(name) && bytes.byteLength > 12 * 1024 * 1024)
+        if (bytes.byteLength > 50 * 1024 * 1024)
           throw new Error("preview too large");
         if (/\.3mf$/i.test(name)) {
-          root = new ThreeMFLoader().parse(bytes);
-          let faces = 0;
-          root.traverse((child) => {
-            const mesh = child as THREE.Mesh;
-            if (!mesh.isMesh) return;
-            faces += mesh.geometry?.getAttribute("position")?.count ?? 0;
-            mesh.material = material();
-          });
-          if (!faces) throw new Error("empty");
+          const positions: number[] = [];
+          visit3mfTriangles(new Uint8Array(bytes), (a, b, c) => positions.push(...a, ...b, ...c));
+          if (!positions.length) throw new Error("empty");
+          const geo = new THREE.BufferGeometry();
+          geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+          geo.computeVertexNormals();
+          root = new THREE.Mesh(geo, material());
           new THREE.Box3().setFromObject(root).getSize(size);
         } else if (/\.obj$/i.test(name)) {
           root = new OBJLoader().parse(new TextDecoder().decode(bytes));

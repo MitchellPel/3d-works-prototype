@@ -46,6 +46,7 @@ export type QuoteEstimate = {
   machineCents: number;
   materialCents: number;
   setupCents: number;
+  minimumAdjustmentCents: number;
   wasteCents: number;
   supportCents: number;
   vatCents: number;
@@ -164,6 +165,7 @@ export function estimateQuote(input: {
     rules.minimum_charge_cents,
     machineCents + materialCents + setupCents,
   );
+  const minimumAdjustmentCents = beforeTax - machineCents - materialCents - setupCents;
   const vatCents = Math.round(beforeTax * (rules.vat_percent / 100));
   const totalCents = beforeTax + vatCents + rules.delivery_fee_cents;
   return {
@@ -177,6 +179,7 @@ export function estimateQuote(input: {
     machineCents,
     materialCents,
     setupCents,
+    minimumAdjustmentCents,
     wasteCents,
     supportCents,
     vatCents,

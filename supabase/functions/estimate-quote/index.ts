@@ -74,12 +74,13 @@ Deno.serve(async (request) => {
     if (!operator?.active || !["staff", "admin"].includes(operator.role))
       return response(origin, { error: "Job not found" }, 404);
   }
-  if (job.price_cents !== null && !job.pricing_provisional)
+  if (job.approved_at && job.price_cents !== null && job.status !== "Cancelled")
     return response(origin, {
       priceCents: job.price_cents,
       status: job.status,
+      summary: job.pricing_summary,
     });
-  if (job.status !== "Submitted" && job.status !== "Quoted")
+  if (job.archived_at || (job.status !== "Submitted" && job.status !== "Quoted"))
     return response(origin, { error: "Order can no longer be repriced" }, 409);
 
   try {
@@ -116,7 +117,24 @@ Deno.serve(async (request) => {
       qty: job.qty,
       quality: job.quality,
     });
-    const { error: calcError } = await admin.from("quote_calculations").upsert({
+    const summary = {
+      machineName: machines.data?.find((m) => m.id === estimate.machineId)?.name ?? "Automatic selection",
+      boundsMm: metrics.boundsMm,
+      printSeconds: estimate.printSeconds,
+      materialGrams: estimate.materialGrams,
+      machineCents: estimate.machineCents,
+      materialCents: estimate.materialCents,
+      setupCents: estimate.setupCents,
+      minimumAdjustmentCents: estimate.minimumAdjustmentCents,
+      vatCents: estimate.vatCents,
+      totalCents: estimate.totalCents,
+    };
+    const { error: calcError } = await admin.rpc("store_quote_calculation", {
+      target_job_id: job.id,
+      expected_updated_at: job.updated_at,
+      summary,
+      provisional: Boolean(rules.data.sample_values),
+      calculation: {
       job_id: job.id,
       machine_id: estimate.machineId,
       material_id: estimate.materialId,
@@ -133,32 +151,23 @@ Deno.serve(async (request) => {
       vat_cents: estimate.vatCents,
       delivery_cents: estimate.deliveryCents,
       total_cents: estimate.totalCents,
+      },
     });
     if (calcError) throw calcError;
-    const { error: updateError } = await admin
-      .from("jobs")
-      .update({
-        status: "Quoted",
-        price_cents: estimate.totalCents,
-        assigned_machine_id: estimate.machineId,
-        quoted_at: new Date().toISOString(),
-        pricing_error: null,
-        pricing_provisional: Boolean(rules.data.sample_values),
-      })
-      .eq("id", job.id)
-      .in("status", ["Submitted", "Quoted"]);
-    if (updateError) throw updateError;
     return response(origin, {
       priceCents: estimate.totalCents,
       status: "Quoted",
       provisional: Boolean(rules.data.sample_values),
+      summary,
     });
   } catch (error) {
-    const reason = error instanceof Error ? error.message : "Pricing failed";
+    const reason = error instanceof Error ? error.message :
+      error && typeof error === "object" && "message" in error ? String(error.message) : "Pricing failed";
+    console.error("estimate-quote", { jobId, reason });
     await admin
       .from("jobs")
       .update({ pricing_error: reason.slice(0, 300) })
-      .eq("id", job.id);
+      .eq("id", job.id).eq("updated_at", job.updated_at).in("status", ["Submitted", "Quoted"]);
     return response(origin, { error: reason }, 422);
   }
 });

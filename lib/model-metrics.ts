@@ -148,34 +148,60 @@ function part(object: Record<string, unknown>, name: string): unknown {
   return key ? object[key] : undefined;
 }
 
-function transformPoint(point: Point, source: unknown): Point {
+function transformPoint(point: Point, source: unknown, unitScale = 1): Point {
   if (!source) return point;
   const matrix = String(source).trim().split(/\s+/).map(numeric);
   if (matrix.length !== 12) throw new Error("Invalid 3MF transform");
   const [x, y, z] = point;
   return [
-    x * matrix[0] + y * matrix[3] + z * matrix[6] + matrix[9],
-    x * matrix[1] + y * matrix[4] + z * matrix[7] + matrix[10],
-    x * matrix[2] + y * matrix[5] + z * matrix[8] + matrix[11],
+    x * matrix[0] + y * matrix[3] + z * matrix[6] + matrix[9] * unitScale,
+    x * matrix[1] + y * matrix[4] + z * matrix[7] + matrix[10] * unitScale,
+    x * matrix[2] + y * matrix[5] + z * matrix[8] + matrix[11] * unitScale,
   ];
 }
 
-function parse3mf(data: Uint8Array, acc: Accumulator) {
+// Use the same production-extension reader for pricing and the customer preview.
+export function visit3mfTriangles(data: Uint8Array, add: (a: Point, b: Point, c: Point) => void) {
+  let expandedBytes = 0;
+  let oversized = false;
   const files = unzipSync(data, {
-    filter: (file) =>
-      /(^|\/)3dmodel\.model$/i.test(file.name) &&
-      file.originalSize <= MAX_XML_BYTES,
+    filter: (file) => {
+      if (!/\.model$/i.test(file.name) && file.name !== "_rels/.rels") return false;
+      expandedBytes += file.originalSize;
+      if (expandedBytes > MAX_XML_BYTES || file.originalSize > MAX_XML_BYTES) {
+        oversized = true;
+        return false;
+      }
+      return true;
+    },
   });
-  const xmlBytes = Object.entries(files).find(([name]) =>
-    /(^|\/)3dmodel\.model$/i.test(name),
-  )?.[1];
-  if (!xmlBytes) throw new Error("3MF model is missing or too large");
-  const document = new XMLParser({
+  if (oversized) throw new Error("3MF model is too large to calculate");
+  const parser = new XMLParser({
     ignoreAttributes: false,
     attributeNamePrefix: "@",
-  }).parse(new TextDecoder().decode(xmlBytes)) as Record<string, unknown>;
-  const model = part(document, "model") as Record<string, unknown> | undefined;
-  if (!model) throw new Error("Invalid 3MF model");
+  });
+  const attribute = (node: Record<string, unknown>, name: string) => {
+    const key = Object.keys(node).find((key) => key.startsWith("@") && key.slice(1).split(":").pop() === name);
+    return key ? node[key] : undefined;
+  };
+  const normalize = (path: string, current = "") => {
+    if (/^[a-z]+:/i.test(path)) throw new Error("External 3MF model URLs are unsupported");
+    const result: string[] = [];
+    for (const segment of (path.startsWith("/") ? path : current.slice(0, current.lastIndexOf("/") + 1) + path).replaceAll("\\", "/").split("/")) {
+      if (!segment || segment === ".") continue;
+      if (segment === "..") { if (!result.length) throw new Error("Invalid 3MF model path"); result.pop(); }
+      else result.push(segment);
+    }
+    return result.join("/");
+  };
+  let rootPath = Object.keys(files).find((name) => /(^|\/)3dmodel\.model$/i.test(name));
+  if (files["_rels/.rels"]) {
+    const rels = parser.parse(new TextDecoder().decode(files["_rels/.rels"]));
+    const relationships = part(rels, "Relationships") as Record<string, unknown> | undefined;
+    const root = children(relationships && part(relationships, "Relationship")).find((rel) => String(attribute(rel, "Type")).endsWith("/3dmodel"));
+    if (root) rootPath = normalize(String(attribute(root, "Target")));
+  }
+  if (!rootPath) throw new Error("3MF model is missing");
   const units: Record<string, number> = {
     micron: 0.001,
     millimeter: 1,
@@ -184,22 +210,35 @@ function parse3mf(data: Uint8Array, acc: Accumulator) {
     foot: 304.8,
     meter: 1000,
   };
-  const scale = units[String(model["@unit"] ?? "millimeter")];
-  if (!scale) throw new Error("Unsupported 3MF units");
-  const resources = part(model, "resources") as
-    Record<string, unknown> | undefined;
-  const objects = new Map(
-    children(resources && part(resources, "object")).map((object) => [
-      String(object["@id"]),
-      object,
-    ]),
-  );
-  const build = part(model, "build") as Record<string, unknown> | undefined;
+  const models = new Map<string, { model: Record<string, unknown>; scale: number; objects: Map<string, Record<string, unknown>> }>();
+  const read = (path: string) => {
+    const cached = models.get(path);
+    if (cached) return cached;
+    const bytes = files[path];
+    if (!bytes) throw new Error("3MF references a missing model file");
+    const document = parser.parse(new TextDecoder().decode(bytes));
+    const model = part(document, "model") as Record<string, unknown> | undefined;
+    if (!model) throw new Error("Invalid 3MF model");
+    const scale = units[String(attribute(model, "unit") ?? "millimeter")];
+    if (!scale) throw new Error("Unsupported 3MF units");
+    const resources = part(model, "resources") as Record<string, unknown> | undefined;
+    const entry = { model, scale, objects: new Map(children(resources && part(resources, "object")).map((object) => [String(attribute(object, "id")), object])) };
+    models.set(path, entry);
+    return entry;
+  };
+  const root = read(rootPath);
+  const build = part(root.model, "build") as Record<string, unknown> | undefined;
   const items = children(build && part(build, "item"));
   if (!items.length) throw new Error("3MF build has no items");
 
-  const emit = (id: string, transforms: unknown[], depth: number) => {
-    if (depth > 8) throw new Error("3MF components are too deeply nested");
+  let faces = 0;
+  const active = new Set<string>();
+  const emit = (path: string, id: string, transforms: { source: unknown; scale: number }[], depth: number) => {
+    if (depth > 32) throw new Error("3MF components are too deeply nested");
+    const key = path + "#" + id;
+    if (active.has(key)) throw new Error("3MF has circular component references");
+    active.add(key);
+    const { objects, scale } = read(path);
     const object = objects.get(id);
     if (!object) throw new Error("3MF build references a missing object");
     const mesh = part(object, "mesh") as Record<string, unknown> | undefined;
@@ -216,20 +255,22 @@ function parse3mf(data: Uint8Array, acc: Accumulator) {
         const vertex = vertices[Number(index)];
         if (!vertex) throw new Error("Invalid 3MF vertex index");
         let result: Point = [
-          numeric(vertex["@x"]),
-          numeric(vertex["@y"]),
-          numeric(vertex["@z"]),
+          numeric(vertex["@x"]) * scale,
+          numeric(vertex["@y"]) * scale,
+          numeric(vertex["@z"]) * scale,
         ];
         for (const transform of transforms)
-          result = transformPoint(result, transform);
-        return result.map((value) => value * scale) as Point;
+          result = transformPoint(result, transform.source, transform.scale);
+        return result;
       };
-      for (const triangle of triangles)
-        acc.add(
+      for (const triangle of triangles) {
+        if (++faces > MAX_TRIANGLES) throw new Error("Model has too many triangles");
+        add(
           point(triangle["@v1"]),
           point(triangle["@v2"]),
           point(triangle["@v3"]),
         );
+      }
     }
     const components = part(object, "components") as
       Record<string, unknown> | undefined;
@@ -237,13 +278,18 @@ function parse3mf(data: Uint8Array, acc: Accumulator) {
       components && part(components, "component"),
     ))
       emit(
+        attribute(component, "path") ? normalize(String(attribute(component, "path")), path) : path,
         String(component["@objectid"]),
-        [component["@transform"], ...transforms],
+        [{ source: component["@transform"], scale }, ...transforms],
         depth + 1,
       );
+    active.delete(key);
   };
-  for (const item of items)
-    emit(String(item["@objectid"]), [item["@transform"]], 0);
+  for (const item of items) {
+    if (String(attribute(item, "printable") ?? "1") === "0") continue;
+    emit(attribute(item, "path") ? normalize(String(attribute(item, "path")), rootPath) : rootPath,
+      String(item["@objectid"]), [{ source: item["@transform"], scale: root.scale }], 0);
+  }
 }
 
 export function measureModel(data: Uint8Array, fileName: string): ModelMetrics {
@@ -252,7 +298,7 @@ export function measureModel(data: Uint8Array, fileName: string): ModelMetrics {
   const acc = new Accumulator();
   if (/\.stl$/i.test(fileName)) parseStl(data, acc);
   else if (/\.obj$/i.test(fileName)) parseObj(data, acc);
-  else if (/\.3mf$/i.test(fileName)) parse3mf(data, acc);
+  else if (/\.3mf$/i.test(fileName)) visit3mfTriangles(data, (a, b, c) => acc.add(a, b, c));
   else throw new Error("Use an STL, OBJ, or 3MF file");
   return acc.finish();
 }

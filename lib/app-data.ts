@@ -38,6 +38,19 @@ export type Job = {
   assignedMachineId: string | null;
   pricingError: string | null;
   pricingProvisional: boolean;
+  archived: boolean;
+  pricingSummary: {
+    machineName: string;
+    boundsMm?: number[];
+    printSeconds: number;
+    materialGrams: number;
+    machineCents: number;
+    materialCents: number;
+    setupCents: number;
+    minimumAdjustmentCents: number;
+    vatCents: number;
+    totalCents: number;
+  } | null;
   activity: string[];
 };
 
@@ -51,6 +64,7 @@ export const stages: Stage[] = [
   "Completed",
   "Cancelled",
 ];
+export const productionStages: Stage[] = stages.filter((stage) => stage !== "Cancelled");
 
 export function toJob(row: Record<string, unknown>, activity: string[]): Job {
   return {
@@ -76,6 +90,8 @@ export function toJob(row: Record<string, unknown>, activity: string[]): Job {
     assignedMachineId: row.assigned_machine_id ? String(row.assigned_machine_id) : null,
     pricingError: row.pricing_error ? String(row.pricing_error) : null,
     pricingProvisional: Boolean(row.pricing_provisional),
+    archived: Boolean(row.archived_at),
+    pricingSummary: row.pricing_summary ? row.pricing_summary as Job["pricingSummary"] : null,
     activity,
   };
 }
