@@ -105,13 +105,27 @@ export function estimateQuote(input: {
     ) / 1_000_000;
   positive(printedVolumeMm3, "estimated print volume");
 
+  const qualityMultiplier = input.quality.startsWith("Draft")
+    ? rules.quality_draft_multiplier
+    : input.quality.startsWith("Fine")
+      ? rules.quality_fine_multiplier
+      : 1;
+  const printVolume = printedVolumeMm3 * positive(qualityMultiplier, "quality multiplier");
+  // The part may be turned by 90 degrees on the build plate. Price every
+  // machine that fits, using its own throughput and hourly billing rate.
+  const orientations: [number, number, number][] = [
+    [x, y, z], [x, z, y], [y, x, z],
+    [y, z, x], [z, x, y], [z, y, x],
+  ];
+  const machineHours = (m: MachineRate) =>
+    printVolume / positive(m.throughput_mm3_per_hour, "printer throughput");
   const fittingMachines = input.machines
-    .filter((m) => x <= m.build_x_mm && y <= m.build_y_mm && z <= m.build_z_mm)
-    .sort(
-      (a, b) =>
-        a.priority - b.priority ||
-        a.billing_cents_per_hour - b.billing_cents_per_hour,
-    );
+    .filter((m) => orientations.some(([a, b, c]) =>
+      a <= m.build_x_mm && b <= m.build_y_mm && c <= m.build_z_mm))
+    .sort((a, b) =>
+      Math.ceil(machineHours(a) * a.billing_cents_per_hour) -
+        Math.ceil(machineHours(b) * b.billing_cents_per_hour) ||
+      a.priority - b.priority || a.name.localeCompare(b.name));
   if (!fittingMachines.length)
     throw new Error("Model exceeds configured printer size");
   if (!input.materials.length) throw new Error("Material is not configured");
@@ -121,14 +135,7 @@ export function estimateQuote(input: {
       a.package_cost_cents / a.package_quantity -
       b.package_cost_cents / b.package_quantity,
   )[0];
-  const qualityMultiplier = input.quality.startsWith("Draft")
-    ? rules.quality_draft_multiplier
-    : input.quality.startsWith("Fine")
-      ? rules.quality_fine_multiplier
-      : 1;
-  const printHours =
-    (printedVolumeMm3 * positive(qualityMultiplier, "quality multiplier")) /
-    positive(machine.throughput_mm3_per_hour, "printer throughput");
+  const printHours = machineHours(machine);
   const printSeconds = Math.max(1, Math.ceil(printHours * 3600));
   const modelMaterialGrams =
     (printedVolumeMm3 / 1000) *

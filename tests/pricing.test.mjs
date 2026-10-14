@@ -68,6 +68,35 @@ test("rejects models larger than available machines", () => {
   );
 });
 
+test("automatically quotes the least costly fitting machine", () => {
+  const small = { ...machine, id: "small", name: "Small", build_x_mm: 80,
+    priority: 100, billing_cents_per_hour: 9000, throughput_mm3_per_hour: 1000 };
+  const large = { ...machine, id: "large", name: "Large", build_x_mm: 250,
+    priority: 1, billing_cents_per_hour: 18000, throughput_mm3_per_hour: 1000 };
+  const base = { machines: [large, small], materials: [material], rules,
+    infill: 20, qty: 1, quality: "Standard" };
+  const smallPart = estimateQuote({ ...base,
+    model: { boundsMm: [50, 10, 10], enclosedVolumeMm3: 5000 } });
+  const largePart = estimateQuote({ ...base,
+    model: { boundsMm: [200, 10, 10], enclosedVolumeMm3: 20000 } });
+  assert.equal(smallPart.machineId, "small");
+  assert.equal(largePart.machineId, "large");
+  assert.ok(largePart.machineCents > smallPart.machineCents);
+});
+
+test("considers right-angle orientation and actual machine throughput", () => {
+  const fast = { ...machine, id: "fast", name: "Fast", build_x_mm: 100,
+    build_y_mm: 60, build_z_mm: 50, priority: 100,
+    billing_cents_per_hour: 20000, throughput_mm3_per_hour: 4000 };
+  const slow = { ...machine, id: "slow", name: "Slow", build_x_mm: 100,
+    build_y_mm: 60, build_z_mm: 50, priority: 1,
+    billing_cents_per_hour: 10000, throughput_mm3_per_hour: 1000 };
+  const quote = estimateQuote({ model: { boundsMm: [50, 90, 40], enclosedVolumeMm3: 10000 },
+    machines: [slow, fast], materials: [material], rules,
+    infill: 20, qty: 1, quality: "Standard" });
+  assert.equal(quote.machineId, "fast");
+});
+
 test("fine quality and support allowance increase the estimate", () => {
   const input = {
     model: { boundsMm: [10, 10, 10], enclosedVolumeMm3: 1000 },
