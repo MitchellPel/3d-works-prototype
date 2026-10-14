@@ -283,7 +283,7 @@ export function AdminPanel() {
                 <span>
                   <input
                     type="number"
-                    step="0.01"
+                    step={key === "default_lead_days" ? "1" : "0.01"}
                     min="0"
                     value={rules ? Number(rules[key]) / scale : ""}
                     onChange={(event) =>
@@ -406,6 +406,15 @@ export function AdminPanel() {
                     ),
                   )}
                 </span>
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={machine.active}
+                  onChange={(e) => setMachines((current) => current.map((item, i) =>
+                    i === index ? { ...item, active: e.target.checked } : item))}
+                />
+                Available for quotes
               </label>
               <button
                 className="btn"
@@ -539,6 +548,15 @@ export function AdminPanel() {
                     })
                   }
                 />
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={material.active}
+                  onChange={(e) => setMaterials((current) => current.map((item, i) =>
+                    i === index ? { ...item, active: e.target.checked } : item))}
+                />
+                Available for quotes
               </label>
               <button
                 className="btn"
