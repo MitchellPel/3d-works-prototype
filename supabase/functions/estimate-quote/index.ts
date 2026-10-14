@@ -119,6 +119,7 @@ Deno.serve(async (request) => {
     });
     const summary = {
       machineName: machines.data?.find((m) => m.id === estimate.machineId)?.name ?? "Automatic selection",
+      geometryMethod: estimate.geometryMethod,
       boundsMm: metrics.boundsMm,
       printSeconds: estimate.printSeconds,
       materialGrams: estimate.materialGrams,

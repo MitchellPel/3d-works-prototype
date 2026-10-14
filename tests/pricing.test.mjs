@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { estimateQuote } from "../lib/quote-engine.ts";
 import { measureModel } from "../lib/model-metrics.ts";
+import { scanTotalCents } from "../lib/scans.ts";
+import { jobColumns } from "../lib/app-data.ts";
 import { zipSync, strToU8 } from "fflate";
 
 const machine = {
@@ -157,12 +159,31 @@ test("reads a closed ASCII STL in millimetres", () => {
   assert.ok(Math.abs(metrics.enclosedVolumeMm3 - 1 / 6) < 1e-8);
 });
 
+test("customer order columns omit the cost breakdown", () => {
+  assert.equal(jobColumns.split(",").includes("pricing_summary"), false);
+});
+
+test("scan prices stay ex VAT and add 15 percent VAT", () => {
+  assert.equal(scanTotalCents(25000), 28750);
+  assert.equal(scanTotalCents(9900), 11385);
+});
+
 test("uses bounding-box fallback for an open mesh", () => {
   const open =
     "solid open\nfacet normal 0 0 0\nouter loop\nvertex 0 0 0\nvertex 10 0 0\nvertex 0 10 10\nendloop\nendfacet\nendsolid open";
   const metrics = measureModel(new TextEncoder().encode(open), "open.stl");
   assert.deepEqual(metrics.boundsMm, [10, 10, 10]);
   assert.equal(metrics.enclosedVolumeMm3, null);
+  const quote = estimateQuote({
+    model: metrics,
+    machines: [machine],
+    materials: [material],
+    rules,
+    infill: 20,
+    qty: 1,
+    quality: "Standard",
+  });
+  assert.equal(quote.geometryMethod, "bounding-box");
 });
 
 test("material rates change the sell price above the minimum and explain identical small quotes", () => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Plus, Save, Trash2 } from "lucide-react";
 import { getSupabase } from "@/lib/supabase";
 import type { Profile } from "@/lib/app-data";
@@ -35,49 +35,25 @@ const ruleFields: {
   label: string;
   scale: number;
   suffix: string;
+  group: string;
 }[] = [
-  {
-    key: "material_markup_percent",
-    label: "Material markup",
-    scale: 1,
-    suffix: "%",
-  },
-  { key: "waste_percent", label: "Material waste", scale: 1, suffix: "%" },
-  { key: "support_percent", label: "Support allowance", scale: 1, suffix: "%" },
-  {
-    key: "quality_draft_multiplier",
-    label: "Draft time multiplier",
-    scale: 1,
-    suffix: "×",
-  },
-  {
-    key: "quality_fine_multiplier",
-    label: "Fine time multiplier",
-    scale: 1,
-    suffix: "×",
-  },
-  {
-    key: "shell_fraction_percent",
-    label: "Shell share estimate",
-    scale: 1,
-    suffix: "%",
-  },
-  {
-    key: "open_mesh_fill_percent",
-    label: "Open mesh fallback volume",
-    scale: 1,
-    suffix: "%",
-  },
-  { key: "setup_fee_cents", label: "Setup fee", scale: 100, suffix: "R" },
-  {
-    key: "minimum_charge_cents",
-    label: "Minimum charge",
-    scale: 100,
-    suffix: "R",
-  },
-  { key: "vat_percent", label: "VAT", scale: 1, suffix: "%" },
-  { key: "default_lead_days", label: "Default deadline", scale: 1, suffix: "days" },
+  { key: "setup_fee_cents", label: "Setup fee", scale: 100, suffix: "R", group: "Customer price" },
+  { key: "minimum_charge_cents", label: "Minimum charge", scale: 100, suffix: "R", group: "Customer price" },
+  { key: "vat_percent", label: "VAT", scale: 1, suffix: "%", group: "Customer price" },
+  { key: "default_lead_days", label: "Default deadline", scale: 1, suffix: "days", group: "Customer price" },
+  { key: "material_markup_percent", label: "Material markup", scale: 1, suffix: "%", group: "Hidden from customers" },
+  { key: "waste_percent", label: "Material waste", scale: 1, suffix: "%", group: "Hidden from customers" },
+  { key: "support_percent", label: "Support allowance", scale: 1, suffix: "%", group: "Hidden from customers" },
+  { key: "quality_draft_multiplier", label: "Draft time multiplier", scale: 1, suffix: "×", group: "Hidden from customers" },
+  { key: "quality_fine_multiplier", label: "Fine time multiplier", scale: 1, suffix: "×", group: "Hidden from customers" },
+  { key: "shell_fraction_percent", label: "Shell share estimate", scale: 1, suffix: "%", group: "Hidden from customers" },
+  { key: "open_mesh_fill_percent", label: "Open mesh fallback volume", scale: 1, suffix: "%", group: "Hidden from customers" },
 ];
+const ruleGroups = [...new Set(ruleFields.map((field) => field.group))];
+const scanFields = [
+  { key: "scan_file_cents", label: "Scan to STL, ex VAT" },
+  { key: "scan_print_cents", label: "Scan and print, ex VAT" },
+] as const;
 const emptyMachine: Machine = {
   name: "",
   process: "FDM",
@@ -103,14 +79,26 @@ const emptyMaterial: Material = {
 export function AdminPanel() {
   const supabase = getSupabase();
   const [tab, setTab] = useState<
-    "pricing" | "machines" | "materials" | "staff"
+    "pricing" | "scanning" | "invoices" | "contact" | "machines" | "materials" | "staff"
   >("pricing");
   const [rules, setRules] = useState<Rules | null>(null);
+  const [whatsapp, setWhatsapp] = useState("");
+  const [letterhead, setLetterhead] = useState({
+    invoice_legal_name: "",
+    invoice_address: "",
+    invoice_phone: "",
+    invoice_email: "",
+    invoice_registration: "",
+    invoice_vat_number: "",
+    invoice_bank: "",
+  });
   const [machines, setMachines] = useState<Machine[]>([]);
   const [materials, setMaterials] = useState<Material[]>([]);
   const [staff, setStaff] = useState<Profile[]>([]);
   const [invite, setInvite] = useState("");
   const [message, setMessage] = useState("");
+  const [saved, setSaved] = useState("");
+  const savedDialog = useRef<HTMLDialogElement>(null);
   const [busy, setBusy] = useState(false);
 
   const reload = useCallback(async () => {
@@ -126,7 +114,24 @@ export function AdminPanel() {
           .eq("role", "staff")
           .order("created_at"),
       ]);
-    if (ruleResult.data) setRules(ruleResult.data as Rules);
+    if (ruleResult.data) {
+      const data = ruleResult.data as Record<string, unknown>;
+      setRules({
+        ...(ruleResult.data as Rules),
+        scan_file_cents: Number(data.scan_file_cents ?? 25000),
+        scan_print_cents: Number(data.scan_print_cents ?? 9900),
+      });
+      setWhatsapp(String(data.whatsapp ?? "").replace(/\D/g, ""));
+      setLetterhead({
+        invoice_legal_name: String(data.invoice_legal_name ?? ""),
+        invoice_address: String(data.invoice_address ?? ""),
+        invoice_phone: String(data.invoice_phone ?? ""),
+        invoice_email: String(data.invoice_email ?? ""),
+        invoice_registration: String(data.invoice_registration ?? ""),
+        invoice_vat_number: String(data.invoice_vat_number ?? ""),
+        invoice_bank: String(data.invoice_bank ?? ""),
+      });
+    }
     setMachines((machineResult.data ?? []) as Machine[]);
     setMaterials((materialResult.data ?? []) as Material[]);
     setStaff((peopleResult.data ?? []) as Profile[]);
@@ -146,6 +151,13 @@ export function AdminPanel() {
     return () => clearTimeout(timer);
   }, [reload]);
 
+  useEffect(() => {
+    const dialog = savedDialog.current;
+    if (!dialog) return;
+    if (saved && !dialog.open) dialog.showModal();
+    if (!saved && dialog.open) dialog.close();
+  }, [saved]);
+
   async function saveRules() {
     if (!supabase || !rules) return;
     setBusy(true);
@@ -161,13 +173,68 @@ export function AdminPanel() {
         updated_at: new Date().toISOString(),
       })
       .eq("id", true);
-    setMessage(
-      error
-        ? error.message
-        : "Pricing rules saved. Future estimates use these values.",
-    );
+    setMessage(error ? error.message : "");
     setBusy(false);
-    if (!error) void reload();
+    if (!error) {
+      setSaved("Estimate rules saved.");
+      void reload();
+    }
+  }
+
+  async function saveScanPrices() {
+    if (!supabase || !rules) return;
+    setBusy(true);
+    setMessage("");
+    const { error } = await supabase
+      .from("pricing_rules")
+      .update({
+        scan_file_cents: rules.scan_file_cents,
+        scan_print_cents: rules.scan_print_cents,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", true);
+    setMessage(error ? error.message : "");
+    setBusy(false);
+    if (!error) {
+      setSaved("Scan prices saved.");
+      void reload();
+    }
+  }
+
+  async function saveLetterhead() {
+    if (!supabase) return;
+    setBusy(true);
+    setMessage("");
+    const { error } = await supabase
+      .from("pricing_rules")
+      .update({ ...letterhead, updated_at: new Date().toISOString() })
+      .eq("id", true);
+    setMessage(error ? error.message : "");
+    setBusy(false);
+    if (!error) {
+      setSaved("Invoice details saved.");
+      void reload();
+    }
+  }
+
+  async function saveWhatsApp() {
+    if (!supabase) return;
+    if (whatsapp && (whatsapp.length < 8 || whatsapp.length > 15)) {
+      setMessage("WhatsApp number needs the country code, digits only.");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    const { error } = await supabase
+      .from("pricing_rules")
+      .update({ whatsapp, updated_at: new Date().toISOString() })
+      .eq("id", true);
+    setMessage(error ? error.message : "");
+    setBusy(false);
+    if (!error) {
+      setSaved("WhatsApp number saved.");
+      void reload();
+    }
   }
 
   async function saveMachine(machine: Machine) {
@@ -175,9 +242,12 @@ export function AdminPanel() {
     setBusy(true);
     setMessage("");
     const { error } = await supabase.from("machine_rates").upsert(machine);
-    setMessage(error ? error.message : "Machine saved.");
+    setMessage(error ? error.message : "");
     setBusy(false);
-    if (!error) void reload();
+    if (!error) {
+      setSaved(machine.id ? "Machine saved." : "Machine added.");
+      void reload();
+    }
   }
 
   async function saveMaterial(material: Material) {
@@ -185,9 +255,12 @@ export function AdminPanel() {
     setBusy(true);
     setMessage("");
     const { error } = await supabase.from("material_rates").upsert(material);
-    setMessage(error ? error.message : "Material saved.");
+    setMessage(error ? error.message : "");
     setBusy(false);
-    if (!error) void reload();
+    if (!error) {
+      setSaved(material.id ? "Material saved." : "Material added.");
+      void reload();
+    }
   }
 
   async function inviteStaff(event: FormEvent) {
@@ -230,34 +303,33 @@ export function AdminPanel() {
     void reload();
   }
 
+  const sections = [
+    ["pricing", "Pricing"],
+    ["scanning", "Scanning"],
+    ["invoices", "Invoices"],
+    ["contact", "Contact"],
+    ["machines", "Machines"],
+    ["materials", "Materials"],
+    ["staff", "Staff"],
+  ] as const;
+
   return (
-    <main className="board-page admin-page">
-      <div className="staff-title">
-        <div>
-          <span className="overline">OPERATIONS / SETTINGS</span>
-          <h1>Administration</h1>
-          <p>Set pricing inputs and manage staff access.</p>
-        </div>
-      </div>
-      <div
-        className="admin-tabs"
-        role="tablist"
-        aria-label="Administration sections"
-      >
-        {(["pricing", "machines", "materials", "staff"] as const).map(
-          (item) => (
-            <button
-              key={item}
-              role="tab"
-              aria-selected={tab === item}
-              className={tab === item ? "active" : ""}
-              onClick={() => setTab(item)}
-            >
-              {item[0].toUpperCase() + item.slice(1)}
-            </button>
-          ),
-        )}
-      </div>
+    <div className="admin-page">
+      <div className="admin-layout">
+      <nav className="admin-nav" aria-label="Administration sections">
+        {sections.map(([item, label]) => (
+          <button
+            key={item}
+            type="button"
+            aria-current={tab === item ? "page" : undefined}
+            className={tab === item ? "active" : ""}
+            onClick={() => setTab(item)}
+          >
+            {label}
+          </button>
+        ))}
+      </nav>
+      <div className="admin-main">
       {message && (
         <p className="admin-message" role="status">
           {message}
@@ -272,41 +344,150 @@ export function AdminPanel() {
             </span>
           </div>
           <p>
-            These settings set the price customers can confirm immediately.
-            Existing confirmed orders keep their original price. Collection is
-            the current fulfilment option; staff can edit each job deadline.
+            Customers only see the order total. These rules build that total.
+            Confirmed orders keep the price they were placed at.
           </p>
+          <ol>
+            <li>The customer picks material, colour, quality, infill and quantity. They never pick a printer.</li>
+            <li>Each active machine is checked to see if the model fits, including turned on its side. A machine that is too small is skipped.</li>
+            <li>Print time is the estimated plastic volume divided by that machine&apos;s throughput. Machine cost is that time multiplied by its rand-per-hour rate.</li>
+            <li>The cheapest fitting machine is the one used. If two cost the same, the lower priority number wins.</li>
+            <li>Material cost uses the cheapest active package for the material and colour they chose, then adds waste, support and markup.</li>
+            <li>Setup is added. If the result is under the minimum charge, the total is lifted to that minimum. VAT is added last.</li>
+          </ol>
+          <p>
+            Open a job on the board to see which printer won and the lines that made the total. Assigning a different production machine later does not change a price the customer has already placed.
+          </p>
+          {ruleGroups.map((group) => (
+            <div className="admin-group" key={group}>
+              <h3>{group}</h3>
+              <div className="admin-fields">
+                {ruleFields.filter((field) => field.group === group).map(({ key, label, scale, suffix }) => (
+                  <label key={key}>
+                    {label}
+                    <span>
+                      <input
+                        type="number"
+                        step={key === "default_lead_days" ? "1" : "0.01"}
+                        min="0"
+                        value={rules ? Number(rules[key]) / scale : ""}
+                        onChange={(event) =>
+                          setRules((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  [key]:
+                                    Math.round(
+                                      Number(event.target.value) * scale * 100,
+                                    ) / 100,
+                                }
+                              : current,
+                          )
+                        }
+                      />
+                      <b>{suffix}</b>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          ))}
+          <button className="btn" onClick={saveRules} disabled={busy || !rules}>
+            <Save size={16} /> Save estimate rules
+          </button>
+        </section>
+      )}
+      {tab === "scanning" && (
+        <section className="panel admin-panel">
+          <div className="panel-title">
+            <h2>Scan prices</h2>
+          </div>
+          <p>Prices exclude VAT. The VAT rate on Pricing is added when the customer places the scan order.</p>
           <div className="admin-fields">
-            {ruleFields.map(({ key, label, scale, suffix }) => (
+            {scanFields.map(({ key, label }) => (
               <label key={key}>
                 {label}
                 <span>
                   <input
                     type="number"
-                    step={key === "default_lead_days" ? "1" : "0.01"}
+                    step="0.01"
                     min="0"
-                    value={rules ? Number(rules[key]) / scale : ""}
+                    value={rules ? Number(rules[key]) / 100 : ""}
                     onChange={(event) =>
                       setRules((current) =>
                         current
                           ? {
                               ...current,
-                              [key]:
-                                Math.round(
-                                  Number(event.target.value) * scale * 100,
-                                ) / 100,
+                              [key]: Math.round(Number(event.target.value) * 10000) / 100,
                             }
                           : current,
                       )
                     }
                   />
-                  <b>{suffix}</b>
+                  <b>R</b>
                 </span>
               </label>
             ))}
           </div>
-          <button className="btn" onClick={saveRules} disabled={busy || !rules}>
-            <Save size={16} /> Save estimate rules
+          <button className="btn" onClick={saveScanPrices} disabled={busy || !rules}>
+            <Save size={16} /> Save scan prices
+          </button>
+        </section>
+      )}
+      {tab === "invoices" && (
+        <section className="panel admin-panel">
+          <div className="panel-title">
+            <h2>Invoice letterhead</h2>
+          </div>
+          <p>Printed on the invoice when an order is marked paid. A VAT number makes the document a tax invoice.</p>
+          <div className="admin-fields">
+            {([
+              ["invoice_legal_name", "Legal name"],
+              ["invoice_phone", "Phone"],
+              ["invoice_email", "Email"],
+              ["invoice_registration", "Company registration"],
+              ["invoice_vat_number", "VAT number"],
+            ] as const).map(([key, label]) => (
+              <label key={key}>
+                {label}
+                <input value={letterhead[key]} onChange={(event) => setLetterhead({ ...letterhead, [key]: event.target.value })} />
+              </label>
+            ))}
+            <label className="wide">
+              Address
+              <textarea rows={2} value={letterhead.invoice_address} onChange={(event) => setLetterhead({ ...letterhead, invoice_address: event.target.value })} />
+            </label>
+            <label className="wide">
+              Bank details
+              <textarea rows={2} value={letterhead.invoice_bank} onChange={(event) => setLetterhead({ ...letterhead, invoice_bank: event.target.value })} />
+            </label>
+          </div>
+          <button className="btn" onClick={saveLetterhead} disabled={busy}>
+            <Save size={16} /> Save invoice details
+          </button>
+        </section>
+      )}
+      {tab === "contact" && (
+        <section className="panel admin-panel">
+          <div className="panel-title">
+            <h2>Contact</h2>
+          </div>
+          <p>This number is the WhatsApp button on the site. Leave it blank to hide the button.</p>
+          <div className="admin-fields contact-fields">
+            <label>
+              WhatsApp number
+              <input
+                inputMode="numeric"
+                autoComplete="tel"
+                placeholder="27821234567"
+                value={whatsapp}
+                onChange={(event) => setWhatsapp(event.target.value.replace(/\D/g, "").slice(0, 15))}
+              />
+              <small>Country code and digits only. No plus sign or spaces.</small>
+            </label>
+          </div>
+          <button className="btn" onClick={saveWhatsApp} disabled={busy}>
+            <Save size={16} /> Save WhatsApp number
           </button>
         </section>
       )}
@@ -317,9 +498,7 @@ export function AdminPanel() {
             <span>{machines.length} configured</span>
           </div>
           <p>
-            Hourly billing rates come from the private costing workbook.
-            Throughput and build size are starting assumptions that the client
-            can refine.
+            These rates are not a menu for the customer. A quote uses the cheapest active machine that can fit the model. Throughput is how much plastic it is assumed to print per hour. Build size is the limit for fitting the model.
           </p>
           {[...machines, { ...emptyMachine }].map((machine, index) => (
             <div className="admin-rate" key={machine.id ?? `draft-${index}`}>
@@ -608,6 +787,13 @@ export function AdminPanel() {
           ))}
         </section>
       )}
-    </main>
+      </div>
+      </div>
+      <dialog className="save-pop" ref={savedDialog} onClose={() => setSaved("")}>
+        <h2>Saved</h2>
+        <p>{saved}</p>
+        <button className="btn" type="button" onClick={() => setSaved("")}>OK</button>
+      </dialog>
+    </div>
   );
 }

@@ -28,24 +28,44 @@ import { PriceBreakdown } from "@/components/price-breakdown";
 import { FunctionsHttpError } from "@supabase/supabase-js";
 import { getSupabase } from "@/lib/supabase";
 import {
+  jobColumns,
+  jobGuardColumns,
   toJob,
+  toInvoice,
   stages,
   productionStages,
   type Job,
+  type Invoice,
   type Profile,
   type Stage,
 } from "@/lib/app-data";
+import { studioWhatsApp, whatsappHrefFor } from "@/lib/studio";
+import { scanDefaults, scanServices, scanTotalCents, type ScanKind } from "@/lib/scans";
+import logo from "../Workslogo.jpg";
+import modelPrint from "../assets/services/model-print.png";
+import modelScan from "../assets/services/model-scan.png";
+import signagePrint from "../assets/services/signage-print.png";
 
 type Route =
   "home" | "quote" | "tracking" | "board" | "detail" | "admin" | "account";
 type Option = { material_type: string; colour: string };
 type MachineOption = { id: string; name: string };
+type PublicStudio = {
+  scan_file_cents: number;
+  scan_print_cents: number;
+  vat_percent: number;
+  whatsapp: string;
+};
 const money = (value: number) =>
   "R " +
   value.toLocaleString("en-ZA", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
+const dropoffText = (value: string | null) =>
+  value
+    ? new Date(value).toLocaleString("en-ZA", { dateStyle: "medium", timeStyle: "short" })
+    : "";
 const modelFile = (name: string) => /\.(stl|obj|3mf)$/i.test(name);
 
 async function functionError(error: unknown, fallback = "Calculation failed. Please try again.") {
@@ -61,12 +81,7 @@ async function functionError(error: unknown, fallback = "Calculation failed. Ple
 function Logo() {
   return (
     <span className="logo">
-      <span className="logo-symbol">
-        <i />
-        <i />
-        <i />
-      </span>
-      3D <b>CRAFTWORX</b>
+      <img src={logo.src} alt="3D Craftworx East London" />
     </span>
   );
 }
@@ -105,6 +120,15 @@ export default function Home() {
   const [infill, setInfill] = useState(20);
   const [qty, setQty] = useState(1);
   const [note, setNote] = useState("");
+  const [offer, setOffer] = useState<"choose" | "print" | "scan" | "signage">("choose");
+  const [scanKind, setScanKind] = useState<ScanKind>("scan-file");
+  const [scanPhoto, setScanPhoto] = useState<File | null>(null);
+  const [scanDay, setScanDay] = useState("");
+  const [scanTime, setScanTime] = useState("");
+  const [publicStudio, setPublicStudio] = useState<PublicStudio | null>(null);
+  const [companyInvoice, setCompanyInvoice] = useState(false);
+  const [bill, setBill] = useState({ company: "", address: "", vat: "", registration: "", email: "", po: "" });
+  const [invoiceId, setInvoiceId] = useState("");
   const [staffNote, setStaffNote] = useState("");
   const [assignedStaffId, setAssignedStaffId] = useState("");
   const [assignedMachineId, setAssignedMachineId] = useState("");
@@ -144,6 +168,8 @@ export default function Home() {
 
   const load = useCallback(async () => {
     if (!supabase) return;
+    const studio = await supabase.rpc("studio_public");
+    if (!studio.error && studio.data) setPublicStudio(studio.data as PublicStudio);
     const { data: sessionData } = await supabase.auth.getSession();
     const currentUser = sessionData.session?.user ?? null;
     setUser(currentUser);
@@ -152,13 +178,17 @@ export default function Home() {
       setJobs([]);
       return;
     }
-    const [profileResult, jobsResult] = await Promise.all([
+    const [profileResult, firstJobs] = await Promise.all([
       supabase.from("profiles").select("*").eq("id", currentUser.id).single(),
       supabase
         .from("jobs")
-        .select("*")
+        .select(`${jobColumns},${jobGuardColumns}`)
         .order("created_at", { ascending: false }),
     ]);
+    const jobsResult = firstJobs.error && /geometry_guess|paid_at|guess_accepted_at|kind|dropoff_at|bill_company/.test(firstJobs.error.message)
+      ? await supabase.from("jobs").select(jobColumns).order("created_at", { ascending: false })
+      : firstJobs;
+    if (profileResult.error) setMessage(profileResult.error.message);
     if (profileResult.error) setMessage(profileResult.error.message);
     else setProfile(profileResult.data as Profile);
     if (profileResult.data?.active && ["staff", "admin"].includes(profileResult.data.role)) {
@@ -180,7 +210,19 @@ export default function Home() {
       setMessage(jobsResult.error.message);
       return;
     }
-    const rows = jobsResult.data ?? [];
+    let rows = jobsResult.data ?? [];
+    if (profileResult.data?.active && ["staff", "admin"].includes(profileResult.data.role)) {
+      const summaries = await supabase.rpc("staff_job_summaries");
+      if (!summaries.error) {
+        const byId = new Map(
+          (summaries.data ?? []).map((row) => [row.id, row.pricing_summary]),
+        );
+        rows = rows.map((row) => ({
+          ...row,
+          pricing_summary: byId.get(row.id) ?? null,
+        }));
+      }
+    }
     const events = rows.length
       ? await supabase
           .from("job_events")
@@ -200,6 +242,16 @@ export default function Home() {
           .map((event) => event.message),
       ),
     );
+    if (converted.length) {
+      const invoices = await supabase
+        .from("invoices")
+        .select("job_id,invoice_number,issued_at,heading,studio,buyer,description,ex_vat_cents,vat_percent,vat_cents,total_cents")
+        .in("job_id", converted.map((job) => job.id));
+      if (!invoices.error) {
+        const byJob = new Map((invoices.data ?? []).map((row) => [String(row.job_id), toInvoice(row)]));
+        for (const job of converted) job.invoice = byJob.get(job.id) ?? null;
+      }
+    }
     setJobs(converted);
     setSelectedId((current) =>
       current && converted.some((job) => job.id === current)
@@ -209,6 +261,19 @@ export default function Home() {
           ""),
     );
   }, [supabase]);
+
+  useEffect(() => {
+    if (!selected) return;
+    setCompanyInvoice(Boolean(selected.billCompany));
+    setBill({
+      company: selected.billCompany,
+      address: selected.billAddress,
+      vat: selected.billVat,
+      registration: selected.billRegistration,
+      email: selected.billEmail,
+      po: selected.billPo,
+    });
+  }, [selected?.id]);
 
   useEffect(() => {
     const valid: Route[] = [
@@ -388,12 +453,75 @@ export default function Home() {
     }
   }
 
+  async function submitScan(event: FormEvent) {
+    event.preventDefault();
+    if (!supabase || !user) {
+      go("account");
+      return;
+    }
+    if (!profile?.active || !scanDay || !scanTime) {
+      setMessage("Choose the day and time you will drop the object off.");
+      return;
+    }
+    const dropoff = new Date(`${scanDay}T${scanTime}`);
+    if (Number.isNaN(dropoff.getTime()) || dropoff.getTime() <= Date.now()) {
+      setMessage("Choose a drop-off day and time in the future.");
+      return;
+    }
+    if (scanPhoto && !/^image\/(jpeg|png|webp|gif)$/.test(scanPhoto.type)) {
+      setMessage("Use a JPG, PNG, or WebP photo.");
+      return;
+    }
+    if (scanPhoto && scanPhoto.size > 15 * 1024 * 1024) {
+      setMessage("The photo must be under 15 MB.");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    let path: string | null = null;
+    try {
+      if (scanPhoto) {
+        path = `${user.id}/${crypto.randomUUID()}/${scanPhoto.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+        const upload = await supabase.storage.from("models").upload(path, scanPhoto, {
+          contentType: scanPhoto.type || "image/jpeg",
+          upsert: false,
+        });
+        if (upload.error) throw upload.error;
+      }
+      const placed = await supabase.rpc("place_scan_order", {
+        kind: scanKind,
+        dropoff: dropoff.toISOString(),
+        picture_path: path,
+        picture_name: scanPhoto?.name ?? "",
+        note: note.trim(),
+      });
+      if (placed.error) throw placed.error;
+      await load();
+      setScanPhoto(null);
+      setNote("");
+      go("tracking");
+      const total = typeof placed.data === "number" ? placed.data / 100 : null;
+      const chosen = scanServices.find((item) => item.kind === scanKind);
+      setMessage(
+        total === null
+          ? "Scan order placed."
+          : `${chosen?.label ?? "Scan"} placed at ${money(total)} including VAT.`,
+      );
+    } catch (error) {
+      if (path) await supabase.storage.from("models").remove([path]);
+      setMessage(error instanceof Error ? error.message : "Could not place the scan order.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function confirm(job: Job) {
     if (
       !supabase ||
       job.price === null ||
       job.status !== "Quoted" ||
-      job.pricingProvisional
+      job.pricingProvisional ||
+      (job.geometryGuess && !job.guessAccepted)
     )
       return;
     setBusy(true);
@@ -405,6 +533,54 @@ export default function Home() {
     else {
       await load();
       setMessage("Order placed at the displayed price. The studio can now arrange payment and production.");
+    }
+    setBusy(false);
+  }
+  async function acceptGuess(job: Job) {
+    if (!supabase || !isStaff) return;
+    setBusy(true);
+    setMessage("");
+    const { error } = await supabase.rpc("accept_volume_guess", { target_job_id: job.id });
+    if (error) setMessage(error.message);
+    else {
+      await load();
+      setMessage("Volume estimate accepted. The customer can place the order.");
+    }
+    setBusy(false);
+  }
+  async function setPaid(job: Job, paid: boolean) {
+    if (!supabase || !isStaff) return;
+    setBusy(true);
+    setMessage("");
+    const { error } = await supabase.rpc("set_job_paid", { target_job_id: job.id, paid });
+    if (error) setMessage(error.message);
+    else {
+      await load();
+      setMessage(paid ? "Marked paid. The invoice is ready to print." : job.invoice ? "Marked unpaid. The invoice already issued stays on the order." : "Marked unpaid.");
+    }
+    setBusy(false);
+  }
+  async function saveBilling(job: Job) {
+    if (!supabase) return;
+    if (companyInvoice && !bill.company.trim()) {
+      setMessage("Enter the company name for the invoice.");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    const { error } = await supabase.rpc("save_order_billing", {
+      target_job_id: job.id,
+      company: companyInvoice ? bill.company : "",
+      address: companyInvoice ? bill.address : "",
+      vat: companyInvoice ? bill.vat : "",
+      registration: companyInvoice ? bill.registration : "",
+      accounts_email: companyInvoice ? bill.email : "",
+      po: companyInvoice ? bill.po : "",
+    });
+    if (error) setMessage(error.message);
+    else {
+      await load();
+      setMessage("Invoice details saved.");
     }
     setBusy(false);
   }
@@ -555,12 +731,69 @@ export default function Home() {
         </button>
       )}
       {profile?.role === "admin" && (
-        <button onClick={() => go("admin")}>Admin</button>
+        <button
+          className={route === "admin" ? "active" : ""}
+          onClick={() => go("admin")}
+        >
+          Admin
+        </button>
       )}
     </>
   );
+  function billingFields(job: Job) {
+    if (job.status === "Cancelled") return null;
+    if (job.invoice) {
+      const buyer = job.invoice.buyer;
+      return (
+        <div className="bill-saved">
+          <p>
+            {buyer.company ? `Company invoice · ${buyer.company}` : "Personal invoice"} · {job.invoice.number}
+          </p>
+          <button className="btn outline" type="button" onClick={() => setInvoiceId(job.id)}>View invoice</button>
+        </div>
+      );
+    }
+    return (
+      <div className="bill-form">
+        <p>Company details are printed on the invoice when the order is marked paid.</p>
+        <label className="bill-check">
+          <input type="checkbox" checked={companyInvoice} onChange={(event) => setCompanyInvoice(event.target.checked)} />
+          Company invoice
+        </label>
+        {companyInvoice && (
+          <div className="fields">
+            <label className="wide">Company name<input value={bill.company} onChange={(event) => setBill({ ...bill, company: event.target.value })} /></label>
+            <label className="wide">Billing address<textarea rows={2} value={bill.address} onChange={(event) => setBill({ ...bill, address: event.target.value })} /></label>
+            <label>VAT number<input value={bill.vat} onChange={(event) => setBill({ ...bill, vat: event.target.value })} /></label>
+            <label>Registration number<input value={bill.registration} onChange={(event) => setBill({ ...bill, registration: event.target.value })} /></label>
+            <label>Accounts email<input type="email" value={bill.email} onChange={(event) => setBill({ ...bill, email: event.target.value })} /></label>
+            <label>Purchase order<input value={bill.po} onChange={(event) => setBill({ ...bill, po: event.target.value })} /></label>
+          </div>
+        )}
+        <button className="btn outline" type="button" disabled={busy} onClick={() => saveBilling(job)}>Save company details</button>
+      </div>
+    );
+  }
+  const studioNumber = publicStudio ? publicStudio.whatsapp : studioWhatsApp;
+  const whatsappHref = whatsappHrefFor(studioNumber, "Hi, I would like to ask about a 3D print.");
+  const signageWhatsAppHref = whatsappHrefFor(studioNumber, "Hi, I would like a quote for signage or print.");
+  const scanVat = Number(publicStudio?.vat_percent ?? 15);
+  const scanExVat = (kind: ScanKind) =>
+    publicStudio
+      ? Number(kind === "scan-file" ? publicStudio.scan_file_cents : publicStudio.scan_print_cents)
+      : scanDefaults[kind];
   return (
     <div className="app">
+      <a
+        className="whatsapp-fab"
+        href={whatsappHref || undefined}
+        target={whatsappHref ? "_blank" : undefined}
+        rel={whatsappHref ? "noreferrer" : undefined}
+        aria-disabled={whatsappHref ? undefined : true}
+      >
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M20.5 3.5A11 11 0 0 0 2.1 17.8L1 23l5.4-1.1A11 11 0 0 0 20.5 3.5zm-8.5 17a9.1 9.1 0 0 1-4.6-1.3l-.3-.2-3.2.8.8-3.1-.2-.3A9.1 9.1 0 0 1 12 20.5zm5-6.8c-.3-.1-1.6-.8-1.8-.9s-.4-.1-.6.1-.7.9-.8 1-.3.2-.6.1a7.4 7.4 0 0 1-2.2-1.4 8.2 8.2 0 0 1-1.5-1.9c-.2-.3 0-.4.1-.6l.4-.4.2-.4a.5.5 0 0 0 0-.5c-.1-.1-.6-1.4-.8-1.9s-.4-.4-.6-.4h-.5a1 1 0 0 0-.7.3 3 3 0 0 0-.9 2.2 5.2 5.2 0 0 0 1.1 2.7 11.8 11.8 0 0 0 4.6 4c.5.2 1 .4 1.5.5a3.6 3.6 0 0 0 1.7.1 2.7 2.7 0 0 0 1.8-1.2 2.2 2.2 0 0 0 .2-1.3c-.1-.2-.3-.2-.6-.4z"/></svg>
+        WhatsApp
+      </a>
       <header className="public-header">
         <div className="wrap header-in">
           <button className="plain" onClick={() => go("home")}>
@@ -815,6 +1048,7 @@ export default function Home() {
               <div>
                 <span>CRAFTWORX</span>
                 <p>South Africa</p>
+                <a href={whatsappHref || undefined} target={whatsappHref ? "_blank" : undefined} rel={whatsappHref ? "noreferrer" : undefined}>WhatsApp the studio</a>
               </div>
             </div>
             <div className="wrap footer-bottom">
@@ -840,15 +1074,80 @@ export default function Home() {
       {route === "quote" && (
         <main className="page quote-page">
           <div className="wrap">
-            <div className="page-head">
-              <span className="overline">START A PROJECT</span>
-              <h1>Let&apos;s make it real.</h1>
-              <p>
-                Upload a model and choose how you want it printed. We calculate
-                a price automatically from the model and current print rates.
-              </p>
-            </div>
-            {!user ? (
+            {offer === "choose" ? (
+              <section className="svc" aria-labelledby="svc-title">
+                <div className="svc-eyebrow"><span /><span>YOUR IDEA. MADE REAL.</span><span /></div>
+                <h1 id="svc-title">Choose your <em>service.</em></h1>
+                <p className="svc-intro">From digital models to finished signs, choose what you need and we&apos;ll take it from there.</p>
+                <div className="svc-grid">
+                  <article className="svc-card">
+                    <div className="svc-top"><span>OPTION 01</span><i /></div>
+                    <div className="svc-visual"><img src={modelPrint.src} alt="3D printed mechanical component and wireframe model" /></div>
+                    <div className="svc-body">
+                      <svg className="svc-icon" viewBox="0 0 64 64" aria-hidden="true"><path d="M32 4 56 17.5v29L32 60 8 46.5v-29L32 4Z"/><path d="M8 17.5 32 32l24-14.5M32 32v28M20 11l24 14M44 11 20 25"/></svg>
+                      <div>
+                        <div className="svc-kicker">3D PRINTING</div>
+                        <h2>Upload a model<br /><em>to print</em></h2>
+                        <p>Already have a 3D model? Upload your STL, OBJ or 3MF file and get an estimate for a high-quality print.</p>
+                      </div>
+                    </div>
+                    <button className="svc-btn" type="button" onClick={() => setOffer("print")}>
+                      <span>Upload your model</span><span className="svc-arrow">↗</span>
+                    </button>
+                  </article>
+                  <article className="svc-card">
+                    <div className="svc-top"><span>OPTION 02</span><i /></div>
+                    <div className="svc-visual"><img src={modelScan.src} alt="Part being digitally scanned into a wireframe model" /></div>
+                    <div className="svc-body">
+                      <svg className="svc-icon" viewBox="0 0 64 64" aria-hidden="true"><path d="M22 6H12a6 6 0 0 0-6 6v10M42 6h10a6 6 0 0 1 6 6v10M6 42v10a6 6 0 0 0 6 6h10M58 42v10a6 6 0 0 1-6 6H42"/><circle cx="28" cy="28" r="12"/><path d="m37 37 12 12"/></svg>
+                      <div>
+                        <div className="svc-kicker">3D SCANNING</div>
+                        <h2>Scan a <em>model</em></h2>
+                        <p>Need a digital copy of a physical part? Choose an STL file, or a scan that we also print.</p>
+                      </div>
+                    </div>
+                    <button className="svc-btn" type="button" onClick={() => setOffer("scan")}>
+                      <span>Scan an object</span><span className="svc-arrow">↗</span>
+                    </button>
+                  </article>
+                  <article className="svc-card">
+                    <div className="svc-top"><span>OPTION 03</span><i /></div>
+                    <div className="svc-visual"><img src={signagePrint.src} alt="Vehicle graphics, sign making and rolls of printed vinyl" /></div>
+                    <div className="svc-body">
+                      <svg className="svc-icon" viewBox="0 0 64 64" aria-hidden="true"><path d="M16 22V6h32v16M16 47H8a6 6 0 0 1-6-6V28a6 6 0 0 1 6-6h48a6 6 0 0 1 6 6v13a6 6 0 0 1-6 6h-8"/><path d="M16 38h32v20H16zM45 29h7"/></svg>
+                      <div>
+                        <div className="svc-kicker">SIGNAGE &amp; PRINT</div>
+                        <h2>Signage &amp; print<br /><em>services</em></h2>
+                        <p>Vehicle wraps, custom signs, vinyl printing, cutting, stickers and more. Bring your brand to life.</p>
+                      </div>
+                    </div>
+                    <button className="svc-btn" type="button" onClick={() => setOffer("signage")}>
+                      <span>Explore signage &amp; print</span><span className="svc-arrow">↗</span>
+                    </button>
+                  </article>
+                </div>
+                <div className="svc-trust">
+                  <div><span>✦</span><span><strong>Built with precision</strong><small>Careful work at every stage</small></span></div>
+                  <div><span>◎</span><span><strong>Clear estimates</strong><small>Know your options before ordering</small></span></div>
+                  <div><span>↗</span><span><strong>Human support</strong><small>Real people behind every project</small></span></div>
+                </div>
+              </section>
+            ) : (
+            <>
+            <button className="svc-back" type="button" onClick={() => setOffer("choose")}>← All services</button>
+            {offer === "signage" ? (
+                <section className="panel">
+                  <div className="panel-head">
+                    <span>03</span>
+                    <div>
+                      <h2>Signage &amp; print</h2>
+                      <p>Vehicle wraps, signs, vinyl, cutting and stickers.</p>
+                    </div>
+                  </div>
+                  <p>This form does not book signage yet. Ask the studio on WhatsApp.</p>
+                  <a className="btn" href={signageWhatsAppHref || undefined} target={signageWhatsAppHref ? "_blank" : undefined} rel={signageWhatsAppHref ? "noreferrer" : undefined}>Ask on WhatsApp</a>
+                </section>
+            ) : !user ? (
               <div className="gate">
                 <AuthPanel onComplete={() => void load()} />
               </div>
@@ -858,6 +1157,62 @@ export default function Home() {
                 <p>Contact the site administrator for account access.</p>
               </div>
             ) : (
+              <>
+              {offer === "scan" ? (
+                <form className="scan-form" onSubmit={submitScan}>
+                  <section className="panel">
+                    <div className="panel-head">
+                      <span>01</span>
+                      <div>
+                        <h2>Scan an object</h2>
+                        <p>Drop the object at the studio. Prices exclude VAT.</p>
+                      </div>
+                    </div>
+                    {scanServices.map((service) => (
+                      <label className="scan-choice" key={service.kind}>
+                        <input
+                          type="radio"
+                          name="scan-service"
+                          checked={scanKind === service.kind}
+                          onChange={() => setScanKind(service.kind)}
+                        />
+                        <span>
+                          <b>{service.label}</b>
+                          <small>
+                            {money(scanExVat(service.kind) / 100)} ex VAT · {money(scanTotalCents(scanExVat(service.kind), scanVat) / 100)} including VAT
+                          </small>
+                        </span>
+                      </label>
+                    ))}
+                    <label>
+                      Photo of the object
+                      <input
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp,image/gif"
+                        onChange={(e) => setScanPhoto(e.target.files?.[0] ?? null)}
+                      />
+                      <small>Optional. JPG, PNG, or WebP.</small>
+                    </label>
+                    <div className="fields">
+                      <label>
+                        Drop-off day
+                        <input type="date" required value={scanDay} onChange={(e) => setScanDay(e.target.value)} />
+                      </label>
+                      <label>
+                        Drop-off time
+                        <input type="time" required value={scanTime} onChange={(e) => setScanTime(e.target.value)} />
+                      </label>
+                      <label className="wide">
+                        Notes
+                        <textarea rows={3} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Size, colour, or what you want printed" />
+                      </label>
+                    </div>
+                    <button className="btn" type="submit" disabled={busy}>
+                      {busy ? "Placing…" : "Place scan order"} <ArrowRight size={17} />
+                    </button>
+                  </section>
+                </form>
+              ) : (
               <form className="quote-grid" onSubmit={submit}>
                 <div className="quote-main">
                   <section className="panel">
@@ -1022,6 +1377,10 @@ export default function Home() {
                   </section>
                 </aside>
               </form>
+              )}
+              </>
+            )}
+            </>
             )}
           </div>
         </main>
@@ -1074,7 +1433,10 @@ export default function Home() {
                         </span>
                         <span>
                           <b>{job.code}</b>
-                          <small>{job.file}</small>
+                          <small>{job.kind === "print" ? job.file : job.material}</small>
+                          <b>
+                            {job.price === null ? "Price pending" : money(job.price)}
+                          </b>
                           <span className="chip">{job.status}</span>
                         </span>
                       </button>
@@ -1085,10 +1447,11 @@ export default function Home() {
                     <div className="order-top">
                       <div>
                         <span className="overline">ORDER {selected.code}</span>
-                        <h2>{selected.file}</h2>
+                        <h2>{selected.kind === "print" ? selected.file : selected.material}</h2>
                         <p>
-                          {selected.material} · {selected.colour} ·{" "}
-                          {selected.qty} piece{selected.qty === 1 ? "" : "s"}
+                          {selected.kind === "print"
+                            ? `${selected.material} · ${selected.colour} · ${selected.qty} piece${selected.qty === 1 ? "" : "s"}`
+                            : `${selected.material}${selected.dropoff ? ` · drop off ${dropoffText(selected.dropoff)}` : ""}`}
                         </p>
                       </div>
                       <span className="chip">{selected.status}</span>
@@ -1108,23 +1471,20 @@ export default function Home() {
                       </p>
                     </div>
                     <div className="checkout-card">
-                      <span className="overline">ORDER PRICE</span>
+                      <span className="overline">TOTAL</span>
                       <strong>
                         {selected.price === null
                           ? selected.status === "Cancelled" ? "No price calculated" : selected.pricingError ? "Calculation failed" : "Calculating…"
                           : money(selected.price)}
                       </strong>
                       <p>
-                        Calculated from your model and the studio&apos;s current
-                        rates. Place this order for collection at the price
-                        shown. Online payment is being set up.
+                        {selected.kind === "print"
+                          ? "Collection price. Online payment is being set up."
+                          : `${selected.dropoff ? `Drop off ${dropoffText(selected.dropoff)}. ` : ""}Includes VAT.`}
                       </p>
-                      <PriceBreakdown summary={selected.pricingSummary} />
                       {selected.pricingProvisional &&
                         selected.price !== null && (
-                          <p>
-                            Sample pricing is awaiting administrator approval.
-                          </p>
+                          <p>The studio is confirming this price.</p>
                         )}
                       {["Submitted", "Quoted"].includes(selected.status) && !selected.archived && (
                         <button
@@ -1135,8 +1495,12 @@ export default function Home() {
                           Refresh estimate
                         </button>
                       )}
+                      {selected.geometryGuess && !selected.guessAccepted && (
+                        <p>The studio is checking this file before the order can be placed.</p>
+                      )}
                       {selected.status === "Quoted" &&
-                        !selected.pricingProvisional && (
+                        !selected.pricingProvisional &&
+                        !(selected.geometryGuess && !selected.guessAccepted) && (
                           <button
                             className="btn"
                             disabled={busy}
@@ -1146,16 +1510,29 @@ export default function Home() {
                           </button>
                         )}
                     </div>
+                    {selected.invoice && (
+                      <div className="bill-saved">
+                        <p>Invoice {selected.invoice.number}</p>
+                        <button className="btn" type="button" onClick={() => setInvoiceId(selected.id)}>View invoice</button>
+                      </div>
+                    )}
                     {selected.note && (
                       <p className="note-text">Studio note: {selected.note}</p>
                     )}
                     <div className="order-meta">
-                      <div>
-                        <span>Material</span>
-                        <b>
-                          {selected.material} / {selected.colour}
-                        </b>
-                      </div>
+                      {selected.kind === "print" ? (
+                        <div>
+                          <span>Material</span>
+                          <b>
+                            {selected.material} / {selected.colour}
+                          </b>
+                        </div>
+                      ) : (
+                        <div>
+                          <span>Drop-off</span>
+                          <b>{selected.dropoff ? dropoffText(selected.dropoff) : "Not set"}</b>
+                        </div>
+                      )}
                       <div>
                         <span>Due date</span>
                         <b>{selected.due}</b>
@@ -1191,12 +1568,14 @@ export default function Home() {
                         </div>
                       ))}
                     </div>
+                    {selected.file !== "No photo" && (
                     <button
                       className="text-action"
                       onClick={() => download(selected)}
                     >
-                      Download your model
+                      {selected.kind === "print" ? "Download your model" : "Download the photo"}
                     </button>
+                    )}
                     <div className="order-actions">
                       {!selected.archived && (isStaff || ["Submitted", "Quoted", "Approved"].includes(selected.status)) && !["Cancelled", "Completed"].includes(selected.status) &&
                         <button className="btn danger" disabled={busy} onClick={() => cancelOrder(selected)}>Cancel order</button>}
@@ -1233,16 +1612,17 @@ export default function Home() {
                           : "Job board"}
                     </h1>
                     <p>
-                      Orders and production, updated in real time from the
-                      shared database.
+                      {route === "admin"
+                        ? "Pricing, machines, materials, and who can work jobs."
+                        : "Orders and production from the shared database."}
                     </p>
                   </div>
                   <div className="workspace-nav">
-                    <button onClick={() => go("board")}>Job board</button>
+                    <button className={route === "board" ? "active" : ""} onClick={() => go("board")}>Job board</button>
                     <button onClick={() => { setShowArchived(!showArchived); setSelectedId(""); go("board"); }}>{showArchived ? "Active jobs" : "Archived jobs"}</button>
                     {profile?.role === "admin" && (
-                      <button onClick={() => go("admin")}>
-                        Settings & staff
+                      <button className={route === "admin" ? "active" : ""} onClick={() => go("admin")}>
+                        Admin
                       </button>
                     )}
                   </div>
@@ -1278,7 +1658,7 @@ export default function Home() {
                               <p>{job.customer}</p>
                               <div className="card-tags">
                                 <span>{job.material}</span>
-                                <span>× {job.qty}</span>
+                                {job.kind === "print" ? <span>× {job.qty}</span> : <span>Drop-off</span>}
                               </div>
                               <div className="card-bottom">
                                 <span>
@@ -1286,6 +1666,9 @@ export default function Home() {
                                     ? "Estimate pending"
                                     : money(job.price)}
                                 </span>
+                                {["Approved", "Printing", "Post-Processing", "Ready for Collection", "Completed"].includes(job.status) && (
+                                  <span>{job.paid ? "Paid" : "Unpaid"}</span>
+                                )}
                               </div>
                             </button>
                           ))}
@@ -1305,14 +1688,15 @@ export default function Home() {
                         ← Back to board
                       </button>
                       <h2>
-                        {selected.code} · {selected.file}
+                        {selected.code} · {selected.kind === "print" ? selected.file : selected.material}
                       </h2>
                       <p>
                         {selected.customer} · {selected.email}
                       </p>
-                      <PriceBreakdown summary={selected.pricingSummary} />
+                      <PriceBreakdown internal summary={selected.pricingSummary} />
                       <div className="specs">
-                        {[
+                        {(selected.kind === "print"
+                          ? [
                           ["Material", selected.material],
                           ["Colour", selected.colour],
                           ["Quality", selected.quality],
@@ -1326,7 +1710,14 @@ export default function Home() {
                               ? "Pending"
                               : money(selected.price),
                           ],
-                        ].map(([label, value]) => (
+                        ]
+                          : [
+                          ["Service", selected.material],
+                          ["Drop-off", selected.dropoff ? dropoffText(selected.dropoff) : "Not set"],
+                          ["Photo", selected.file === "No photo" ? "None" : selected.file],
+                          ["Assigned staff", staffOptions.find((item) => item.id === selected.assignedStaffId)?.display_name ?? "Not assigned"],
+                          ["Price incl. VAT", selected.price === null ? "Pending" : money(selected.price)],
+                        ]).map(([label, value]) => (
                           <div key={String(label)}>
                             <span>{label}</span>
                             <b>{value}</b>
@@ -1378,8 +1769,9 @@ export default function Home() {
                       <button
                         className="btn outline"
                         onClick={() => download(selected)}
+                        hidden={selected.file === "No photo"}
                       >
-                        Download model
+                        {selected.kind === "print" ? "Download model" : "Download the photo"}
                       </button>
                       <div className="activity">
                         <h3>Activity</h3>
@@ -1410,16 +1802,39 @@ export default function Home() {
                           }}
                         >
                           {stages
-                            .filter(
-                              (stage) =>
-                                stage !== "Quoted" ||
-                                selected.status === "Quoted",
-                            )
+                            .filter((stage) => {
+                              if (stage === "Quoted") return selected.status === "Quoted";
+                              if (stage === "Approved" && ["Submitted", "Quoted"].includes(selected.status)) return false;
+                              return true;
+                            })
                             .map((stage) => (
                               <option key={stage}>{stage}</option>
                             ))}
                         </select>
                       </label>
+                      {["Submitted", "Quoted"].includes(selected.status) && (
+                        <p>
+                          {selected.pricingProvisional
+                            ? "Sample pricing is still on. Save the pricing rules in Admin first. After that, the customer places the order, which moves it to Approved. That step is not a payment."
+                            : "The customer places the order on My orders. That is what moves it to Approved. Staff cannot skip it, and it is not a payment."}
+                        </p>
+                      )}
+                      {selected.geometryGuess && (
+                        <p>
+                          {selected.guessAccepted
+                            ? "Volume estimate accepted. This file was priced from its box, not a closed solid."
+                            : "This file is not a closed solid. The price uses 35% of the bounding box. Accept it before the customer can place the order."}
+                        </p>
+                      )}
+                      {selected.geometryGuess && !selected.guessAccepted && ["Submitted", "Quoted"].includes(selected.status) && (
+                        <button className="btn outline" disabled={busy} onClick={() => acceptGuess(selected)}>Accept volume estimate</button>
+                      )}
+                      {billingFields(selected)}
+                      {["Approved", "Printing", "Post-Processing", "Ready for Collection", "Completed"].includes(selected.status) && (
+                        <button className="btn outline" disabled={busy} onClick={() => setPaid(selected, !selected.paid)}>
+                          {selected.paid ? "Mark unpaid" : "Mark paid"}
+                        </button>
+                      )}
                       <label>
                         Assigned staff
                         <select value={assignedStaffId} onChange={(e) => setAssignedStaffId(e.target.value)}>
@@ -1488,6 +1903,65 @@ export default function Home() {
           </div>
         </main>
       )}
+      {invoiceId && jobs.find((job) => job.id === invoiceId)?.invoice && (
+        <InvoiceSheet
+          invoice={jobs.find((job) => job.id === invoiceId)!.invoice!}
+          onClose={() => setInvoiceId("")}
+        />
+      )}
+    </div>
+  );
+}
+
+function InvoiceSheet({ invoice, onClose }: { invoice: Invoice; onClose: () => void }) {
+  const issued = new Date(invoice.issued).toLocaleDateString("en-ZA", { dateStyle: "medium" });
+  const line = (label: string, value?: string) => value ? <p><span>{label}</span> {value}</p> : null;
+  return (
+    <div className="invoice-sheet" role="dialog" aria-label={invoice.heading}>
+      <div className="invoice-paper">
+        <div className="invoice-top">
+          <div>
+            <h2>{invoice.heading}</h2>
+            <p>{invoice.number}</p>
+            <p>{issued}</p>
+          </div>
+          <div>
+            <b>{invoice.studio.legal_name || "3D Craftworx"}</b>
+            {line("", invoice.studio.address)}
+            {line("", invoice.studio.phone)}
+            {line("", invoice.studio.email)}
+            {line("Reg", invoice.studio.registration)}
+            {line("VAT", invoice.studio.vat_number)}
+          </div>
+        </div>
+        <div className="invoice-buyer">
+          <span>BILL TO</span>
+          <b>{invoice.buyer.company || invoice.buyer.name}</b>
+          {invoice.buyer.company ? <p>{invoice.buyer.name}</p> : null}
+          {line("", invoice.buyer.address)}
+          {line("", invoice.buyer.accounts_email || invoice.buyer.email)}
+          {line("VAT", invoice.buyer.vat)}
+          {line("Reg", invoice.buyer.registration)}
+          {line("PO", invoice.buyer.po)}
+        </div>
+        <table>
+          <thead><tr><th>Description</th><th>Ex VAT</th><th>VAT</th><th>Total</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>{invoice.description}</td>
+              <td>{money(invoice.exVatCents / 100)}</td>
+              <td>{money(invoice.vatCents / 100)} ({invoice.vatPercent}%)</td>
+              <td>{money(invoice.totalCents / 100)}</td>
+            </tr>
+          </tbody>
+        </table>
+        {invoice.studio.bank ? <p className="invoice-bank"><span>Bank</span> {invoice.studio.bank}</p> : null}
+        <p className="invoice-paid">Paid</p>
+        <div className="invoice-actions">
+          <button className="btn" type="button" onClick={() => window.print()}>Save as PDF</button>
+          <button className="btn outline" type="button" onClick={onClose}>Close</button>
+        </div>
+      </div>
     </div>
   );
 }
