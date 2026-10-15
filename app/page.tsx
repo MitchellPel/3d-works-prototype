@@ -102,7 +102,7 @@ function Model({ small = false }: { small?: boolean }) {
 
 export default function Home() {
   const supabase = getSupabase();
-  const [route, setRoute] = useState<Route>("home");
+  const [route, setRoute] = useState<Route>("quote");
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
@@ -287,7 +287,7 @@ export default function Home() {
     ];
     const syncRoute = () => {
       const hash = location.hash.slice(1) as Route;
-      setRoute(valid.includes(hash) ? hash : "home");
+      setRoute(valid.includes(hash) ? hash : "quote");
     };
     syncRoute();
     if (new URLSearchParams(location.search).has("invite")) {
