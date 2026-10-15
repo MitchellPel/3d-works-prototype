@@ -1,2 +1,2 @@
 :HL["/3d-works-prototype/_next/static/chunks/21c68mfv34kvc.css","style"]
-0:{"tree":{"name":"","param":null,"prefetchHints":4176,"slots":{"children":{"name":"__PAGE__","param":null,"prefetchHints":4256,"slots":null}}},"staleTime":300,"buildId":"75YaCaMR2u2Wqrn7JM04r"}
+0:{"tree":{"name":"","param":null,"prefetchHints":4176,"slots":{"children":{"name":"__PAGE__","param":null,"prefetchHints":4256,"slots":null}}},"staleTime":300,"buildId":"qbklke0GZWiSz2ojZL62J"}
