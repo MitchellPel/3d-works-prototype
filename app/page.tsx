@@ -215,7 +215,7 @@ export default function Home() {
       const summaries = await supabase.rpc("staff_job_summaries");
       if (!summaries.error) {
         const byId = new Map(
-          (summaries.data ?? []).map((row) => [row.id, row.pricing_summary]),
+          ((summaries.data ?? []) as { id: string; pricing_summary: unknown }[]).map((row) => [row.id, row.pricing_summary]),
         );
         rows = rows.map((row) => ({
           ...row,
