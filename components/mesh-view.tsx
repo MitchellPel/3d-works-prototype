@@ -4,7 +4,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
 import { STLLoader } from "three/addons/loaders/STLLoader.js";
-import { modelXml } from "@/lib/read-3mf.mjs";
+import { visit3mfTriangles } from "@/lib/model-metrics";
 import { parseBinaryStl } from "@/lib/read-stl.mjs";
 
 const tint: Record<string, number> = {
@@ -22,24 +22,6 @@ function paintColour(name: string) {
   color.getHSL(hsl);
   if (hsl.l < 0.28) color.setHSL(hsl.h, hsl.s, 0.42);
   return color;
-}
-
-function positionsFrom3mf(xml: string) {
-  const doc = new DOMParser().parseFromString(xml, "application/xml");
-  const verts = [...doc.getElementsByTagNameNS("*", "vertex")];
-  const tris = [...doc.getElementsByTagNameNS("*", "triangle")];
-  if (!verts.length || !tris.length) throw new Error("empty");
-  const pos = new Float32Array(tris.length * 9);
-  tris.forEach((tri, index) => {
-    [tri.getAttribute("v1"), tri.getAttribute("v2"), tri.getAttribute("v3")].forEach((id, corner) => {
-      const vert = verts[Number(id)];
-      const at = index * 9 + corner * 3;
-      pos[at] = Number(vert?.getAttribute("x"));
-      pos[at + 1] = Number(vert?.getAttribute("y"));
-      pos[at + 2] = Number(vert?.getAttribute("z"));
-    });
-  });
-  return pos;
 }
 
 export function MeshCanvas({
@@ -60,8 +42,10 @@ export function MeshCanvas({
   const host = useRef<HTMLDivElement>(null);
   const onSizeRef = useRef(onSize);
   const onErrorRef = useRef(onError);
-  onSizeRef.current = onSize;
-  onErrorRef.current = onError;
+  useEffect(() => {
+    onSizeRef.current = onSize;
+    onErrorRef.current = onError;
+  }, [onSize, onError]);
 
   useEffect(() => {
     const el = host.current;
@@ -83,15 +67,17 @@ export function MeshCanvas({
       let root: THREE.Object3D;
       const size = new THREE.Vector3();
       try {
+        if (bytes.byteLength > 50 * 1024 * 1024)
+          throw new Error("preview too large");
         if (/\.3mf$/i.test(name)) {
-          const xml = await modelXml(bytes);
-          if (!xml) throw new Error("empty");
+          const positions: number[] = [];
+          visit3mfTriangles(new Uint8Array(bytes), (a, b, c) => positions.push(...a, ...b, ...c));
+          if (!positions.length) throw new Error("empty");
           const geo = new THREE.BufferGeometry();
-          geo.setAttribute("position", new THREE.BufferAttribute(positionsFrom3mf(xml), 3));
+          geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
           geo.computeVertexNormals();
-          geo.computeBoundingBox();
-          geo.boundingBox?.getSize(size);
           root = new THREE.Mesh(geo, material());
+          new THREE.Box3().setFromObject(root).getSize(size);
         } else if (/\.obj$/i.test(name)) {
           root = new OBJLoader().parse(new TextDecoder().decode(bytes));
           root.traverse((child) => {
@@ -102,17 +88,18 @@ export function MeshCanvas({
         } else {
           let geo: THREE.BufferGeometry | null = null;
           try {
-            const parsed = new STLLoader().parse(bytes);
-            if (parsed.getAttribute("position")?.count) geo = parsed;
+            const positions = parseBinaryStl(bytes);
+            if (positions) {
+              geo = new THREE.BufferGeometry();
+              geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+            } else if (bytes.byteLength <= 8 * 1024 * 1024) {
+              const parsed = new STLLoader().parse(bytes);
+              if (parsed.getAttribute("position")?.count) geo = parsed;
+            }
           } catch {
             geo = null;
           }
-          if (!geo) {
-            const positions = parseBinaryStl(bytes);
-            if (!positions) throw new Error("empty");
-            geo = new THREE.BufferGeometry();
-            geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-          }
+          if (!geo) throw new Error("preview unavailable");
           geo.computeVertexNormals();
           geo.computeBoundingBox();
           geo.boundingBox?.getSize(size);
@@ -125,7 +112,13 @@ export function MeshCanvas({
       }
       if (dead) return;
 
-      const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      let renderer: THREE.WebGLRenderer;
+      try {
+        renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      } catch {
+        onErrorRef.current?.();
+        return;
+      }
       renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
       const scene = new THREE.Scene();
       const camera = new THREE.PerspectiveCamera(40, 1, 0.01, 100);
